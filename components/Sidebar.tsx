@@ -12,7 +12,6 @@ import {
   LogOut,
   Sparkles,
   Landmark,
-  ReceiptText,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { logout } from "@/app/actions/auth";
@@ -44,19 +43,14 @@ const navItems = [
     icon: BarChart3,
   },
   {
-    label: "Assets",
-    href: "/assets",
-    icon: Landmark,
-  },
-  {
-    label: "Transactions",
-    href: "/transactions",
-    icon: ReceiptText,
-  },
-  {
     label: "Settings",
     href: "/settings",
     icon: Settings,
+  },
+  {
+    label: "Asset",
+    href: "/assets",
+    icon: Landmark,
   },
 ];
 
@@ -89,7 +83,7 @@ export default function Sidebar() {
             const isActive =
               item.href === "/"
                 ? pathname === "/"
-                : pathname.startsWith(item.href);
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
             return (
               <li key={item.href}>
