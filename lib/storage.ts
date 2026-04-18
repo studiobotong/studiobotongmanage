@@ -7,7 +7,8 @@
  * Tables:
  *   cashflow                 — 입금/출금/배당 기록
  *   asset_snapshots          — 날짜별 자산 요약
- *   asset_snapshot_holdings  — 날짜별 보유 종목 상태
+ *   asset_snapshot_holdings  — 날짜별 보유 종목 상태 (현재 holdings 원본)
+ *   asset_snapshot_items     — 일별 자동 스냅샷 상세 (크론 /api/snapshot)
  *     (옵션: 컬럼이 없는 구 DB만 NEXT_PUBLIC_INCLUDE_SNAPSHOT_TARGET_WEIGHT_COLUMNS=false)
  */
 
@@ -448,6 +449,7 @@ export async function clearAllData(): Promise<void> {
       supabase.from("cashflow").delete().not("id", "is", null),
       supabase.from("asset_snapshots").delete().not("id", "is", null),
       supabase.from("asset_snapshot_holdings").delete().not("id", "is", null),
+      supabase.from("asset_snapshot_items").delete().not("id", "is", null),
     ]);
   } catch (e) {
     console.error("[storage] clearAllData 예외:", e);
