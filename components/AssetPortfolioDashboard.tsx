@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   PencilLine,
   Gauge,
+  Camera,
 } from "lucide-react";
 import AssetTrendChart from "@/components/AssetTrendChart";
 import DashboardAllocationChart from "@/components/DashboardAllocationChart";
@@ -24,7 +25,16 @@ import {
   hasValidTargetBand,
 } from "@/lib/targetWeightBand";
 import { fetchAssetSnapshots } from "@/lib/assetSnapshots";
-import { getLatestSnapshotHoldings, getCashflows } from "@/lib/storage";
+import {
+  getLatestAssetSnapshot,
+  getLatestSnapshotHoldings,
+  getCashflows,
+} from "@/lib/storage";
+import {
+  netInvestmentKrwFromCashflowsUpTo,
+  profitAndReturnRateFromTotalAndNet,
+  todayDateStringKst,
+} from "@/lib/netInvestment";
 import {
   readStoredUsdKrwRate,
   refreshUsdKrwRateFromApi,
@@ -187,6 +197,9 @@ function SummaryCard({
 export default function AssetPortfolioDashboard() {
   const [holdings, setHoldings] = useState<AssetSnapshotHolding[]>([]);
   const [snapshots, setSnapshots] = useState<AssetSnapshot[]>([]);
+  /** 차트용 목록과 별도로, DB `asset_snapshots` 최신 1행(목업 없음) */
+  const [latestSnapshotRow, setLatestSnapshotRow] =
+    useState<AssetSnapshot | null>(null);
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const [usdKrw, setUsdKrw] = useState<UsdKrwRateState>(() =>
     readStoredUsdKrwRate()
@@ -208,29 +221,96 @@ export default function AssetPortfolioDashboard() {
     setUsdKrw(readStoredUsdKrwRate());
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setFxError(null);
-    setFngRefreshError(null);
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+      setFxError(null);
+      setFngRefreshError(null);
+    }
     applyStoredRate();
     setFng(readStoredFearGreed());
     try {
-      const [snaps, latestHoldings, flows] = await Promise.all([
+      const [snaps, latestHoldings, flows, latestSnap] = await Promise.all([
         fetchAssetSnapshots(),
         getLatestSnapshotHoldings(),
         getCashflows(),
+        getLatestAssetSnapshot(),
       ]);
       setSnapshots(snaps);
+      setLatestSnapshotRow(latestSnap);
       setHoldings(latestHoldings);
       setCashflows(flows);
       setLastUpdated(new Date());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "데이터 로딩 실패");
+      if (!silent) {
+        setError(e instanceof Error ? e.message : "데이터 로딩 실패");
+      } else {
+        throw e;
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [applyStoredRate]);
+
+  const [snapshotRefreshLoading, setSnapshotRefreshLoading] = useState(false);
+  const [snapshotRefreshBanner, setSnapshotRefreshBanner] = useState<{
+    kind: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  const handleSnapshotRefresh = useCallback(async () => {
+    setSnapshotRefreshBanner(null);
+    setSnapshotRefreshLoading(true);
+    try {
+      const res = await fetch("/api/snapshot?repair=1&recalc_summary=1");
+      let data: Record<string, unknown> = {};
+      try {
+        data = (await res.json()) as Record<string, unknown>;
+      } catch {
+        /* ignore */
+      }
+      const ok = res.ok && data.success === true;
+      if (!ok) {
+        const errMsg =
+          typeof data.error === "string" && data.error
+            ? data.error
+            : typeof data.reason === "string" && data.reason
+              ? data.reason
+              : `요청 실패 (${res.status})`;
+        setSnapshotRefreshBanner({ kind: "error", message: errMsg });
+        return;
+      }
+      try {
+        await load({ silent: true });
+      } catch {
+        setSnapshotRefreshBanner({
+          kind: "error",
+          message:
+            "스냅샷은 반영되었을 수 있으나 화면 데이터를 다시 불러오지 못했습니다.",
+        });
+        return;
+      }
+      const dateStr =
+        typeof data.snapshot_date === "string" ? data.snapshot_date : "";
+      setSnapshotRefreshBanner({
+        kind: "success",
+        message: dateStr
+          ? `${dateStr} 기준 스냅샷을 다시 맞췄습니다.`
+          : "스냅샷을 다시 맞췄습니다.",
+      });
+    } catch (e) {
+      setSnapshotRefreshBanner({
+        kind: "error",
+        message: e instanceof Error ? e.message : "네트워크 오류",
+      });
+    } finally {
+      setSnapshotRefreshLoading(false);
+    }
+  }, [load]);
 
   const openFxModal = useCallback(() => {
     setFxManualError(null);
@@ -438,31 +518,52 @@ export default function AssetPortfolioDashboard() {
     };
   }, [totalAssetKRW, defensiveStrategy]);
 
-  const investmentKRW = useMemo(() => {
-    if (cashflows.length > 0) {
-      return cashflows.reduce((sum, cf) => {
-        if (cf.type === "DEPOSIT") return sum + cf.amount;
-        if (cf.type === "WITHDRAW") return sum - cf.amount;
-        return sum;
-      }, 0);
-    }
-    if (snapshots.length > 0) {
-      const latest = [...snapshots].sort((a, b) =>
-        b.snapshot_date.localeCompare(a.snapshot_date)
-      )[0];
-      return latest.net_investment ?? null;
-    }
-    return null;
-  }, [cashflows, snapshots]);
+  /**
+   * 상단 요약 카드(총자산·순투자금·수익·수익률): DB에 `asset_snapshots` 행이 있으면 그 값 우선,
+   * 없을 때만 보유+환율·cashflow로 계산. DIVIDEND는 순투자금에 포함하지 않음(netInvestment 모듈과 동일).
+   */
+  const summaryMetrics = useMemo(() => {
+    const snap = latestSnapshotRow;
 
-  const { returnRate } = useMemo(() => {
-    if (investmentKRW === null || investmentKRW === 0 || totalAssetKRW === 0) {
-      return { netProfit: null, returnRate: null };
+    if (!snap) {
+      const net = netInvestmentKrwFromCashflowsUpTo(
+        cashflows,
+        todayDateStringKst()
+      );
+      const { profit, return_rate } = profitAndReturnRateFromTotalAndNet(
+        totalAssetKRW,
+        net
+      );
+      return {
+        totalAsset: totalAssetKRW,
+        netInvestment: net,
+        profit,
+        returnRate: return_rate,
+      };
     }
-    const profit = totalAssetKRW - investmentKRW;
-    const rate = (profit / investmentKRW) * 100;
-    return { netProfit: profit, returnRate: rate };
-  }, [totalAssetKRW, investmentKRW]);
+
+    const netFallback = netInvestmentKrwFromCashflowsUpTo(
+      cashflows,
+      snap.snapshot_date
+    );
+    const totalAsset =
+      snap.total_asset != null ? snap.total_asset : totalAssetKRW;
+    const netInvestment =
+      snap.net_investment != null ? snap.net_investment : netFallback;
+    const { profit: profitComputed, return_rate: rateComputed } =
+      profitAndReturnRateFromTotalAndNet(totalAsset, netInvestment);
+    const profit =
+      snap.profit != null ? snap.profit : profitComputed;
+    const returnRate =
+      snap.return_rate != null ? snap.return_rate : rateComputed;
+
+    return {
+      totalAsset,
+      netInvestment,
+      profit,
+      returnRate,
+    };
+  }, [latestSnapshotRow, totalAssetKRW, cashflows]);
 
   /** 통합 총자산(KRW 환산) 대비 주식 비중으로 목표·BUY/HOLD/SELL 계산 (Holdings 구간 비중과 별개) */
   const dashboardStockTableRows = useMemo(() => {
@@ -573,8 +674,8 @@ export default function AssetPortfolioDashboard() {
       rateStatus: usdKrw.status,
       lastUpdatedAt: usdKrw.lastUpdatedAt?.toISOString(),
       totalAssetKRW,
-      investmentKRW,
-      returnRate,
+      summaryMetrics,
+      latestSnapshotDate: latestSnapshotRow?.snapshot_date ?? null,
     });
   }, [
     krwAsset,
@@ -583,8 +684,8 @@ export default function AssetPortfolioDashboard() {
     usdKrw.status,
     usdKrw.lastUpdatedAt,
     totalAssetKRW,
-    investmentKRW,
-    returnRate,
+    summaryMetrics,
+    latestSnapshotRow?.snapshot_date,
     loading,
   ]);
 
@@ -691,7 +792,23 @@ export default function AssetPortfolioDashboard() {
                 환율 직접 입력
               </button>
               <button
-                onClick={load}
+                type="button"
+                onClick={handleSnapshotRefresh}
+                disabled={snapshotRefreshLoading || loading}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-sky-700 bg-white border border-sky-200 hover:bg-sky-50 disabled:opacity-50 transition-all shadow-sm"
+              >
+                {snapshotRefreshLoading ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Camera className="w-4 h-4" />
+                )}
+                스냅샷 새로고침
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void load();
+                }}
                 disabled={loading}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 bg-white border border-gray-200 hover:border-gray-300 hover:bg-gray-50 disabled:opacity-50 transition-all shadow-sm"
               >
@@ -718,6 +835,23 @@ export default function AssetPortfolioDashboard() {
             {fngRefreshError}
           </p>
         )}
+        {snapshotRefreshBanner && (
+          <p
+            className={clsx(
+              "text-xs rounded-lg px-3 py-2 max-w-3xl flex items-start gap-2 border",
+              snapshotRefreshBanner.kind === "success"
+                ? "text-emerald-900 bg-emerald-50 border-emerald-100"
+                : "text-amber-800 bg-amber-50 border-amber-100"
+            )}
+          >
+            {snapshotRefreshBanner.kind === "success" ? (
+              <RefreshCw className="w-3.5 h-3.5 shrink-0 mt-0.5 text-emerald-600" />
+            ) : (
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            )}
+            {snapshotRefreshBanner.message}
+          </p>
+        )}
       </div>
 
       {loading ? (
@@ -732,7 +866,9 @@ export default function AssetPortfolioDashboard() {
           <AlertTriangle className="w-10 h-10 text-amber-400" />
           <p className="text-sm font-medium text-gray-700">{error}</p>
           <button
-            onClick={load}
+            onClick={() => {
+              void load();
+            }}
             className="text-sm text-[#5b6af4] hover:underline"
           >
             다시 시도
@@ -743,16 +879,24 @@ export default function AssetPortfolioDashboard() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <SummaryCard
               title="총 자산"
-              value={totalAssetKRW > 0 ? formatKRW(totalAssetKRW) : "-"}
-              sub={`원화 자산 + 미국 자산 환산 합계`}
+              value={
+                summaryMetrics.totalAsset > 0
+                  ? formatKRW(summaryMetrics.totalAsset)
+                  : "-"
+              }
+              sub={
+                latestSnapshotRow
+                  ? `${latestSnapshotRow.snapshot_date} 스냅샷 기준 · 원화+미국자산 환산과 다를 수 있음`
+                  : "원화 자산 + 미국 자산 환산 합계"
+              }
               icon={Wallet}
               iconBg="bg-[#eef0fe]"
               iconColor="text-[#5b6af4]"
               badge={
-                returnRate !== null
+                summaryMetrics.returnRate !== null
                   ? {
-                      label: `${returnRate >= 0 ? "+" : ""}${returnRate.toFixed(2)}%`,
-                      positive: returnRate >= 0,
+                      label: `${summaryMetrics.returnRate >= 0 ? "+" : ""}${summaryMetrics.returnRate.toFixed(2)}%`,
+                      positive: summaryMetrics.returnRate >= 0,
                     }
                   : undefined
               }
@@ -761,14 +905,23 @@ export default function AssetPortfolioDashboard() {
             <SummaryCard
               title="순투자금"
               value={
-                investmentKRW !== null && investmentKRW > 0
-                  ? formatKRW(investmentKRW)
+                summaryMetrics.netInvestment !== null &&
+                summaryMetrics.netInvestment > 0
+                  ? formatKRW(summaryMetrics.netInvestment)
                   : "-"
               }
-              sub="누적 입금 − 누적 출금"
+              sub="누적 입금 − 누적 출금 (배당 제외)"
               icon={TrendingUp}
               iconBg="bg-violet-50"
               iconColor="text-violet-500"
+              badge={
+                summaryMetrics.profit !== null
+                  ? {
+                      label: `${summaryMetrics.profit >= 0 ? "+" : ""}${formatKRW(summaryMetrics.profit)}`,
+                      positive: summaryMetrics.profit >= 0,
+                    }
+                  : undefined
+              }
             />
 
             <SummaryCard

@@ -12,6 +12,7 @@
  *     (옵션: 컬럼이 없는 구 DB만 NEXT_PUBLIC_INCLUDE_SNAPSHOT_TARGET_WEIGHT_COLUMNS=false)
  */
 
+import { netInvestmentKrwFromCashflowsUpTo, profitAndReturnRateFromTotalAndNet } from "./netInvestment";
 import { supabase } from "./supabaseClient";
 import type { Cashflow, AssetSnapshot, AssetSnapshotHolding } from "@/types/assets";
 
@@ -146,6 +147,41 @@ export async function getSnapshots(): Promise<AssetSnapshot[]> {
   }
 }
 
+/** `snapshot_date` 최신 1행 (없으면 null). 차트용 전체는 `getSnapshots` / `fetchAssetSnapshots` */
+export async function getLatestAssetSnapshot(): Promise<AssetSnapshot | null> {
+  try {
+    const { data, error } = await supabase
+      .from("asset_snapshots")
+      .select("*")
+      .order("snapshot_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[storage] getLatestAssetSnapshot 오류:", error.message);
+      return null;
+    }
+    if (!data) return null;
+
+    return {
+      id:             String(data.id ?? ""),
+      snapshot_date:  String(data.snapshot_date ?? ""),
+      total_asset:    toNum(data.total_asset),
+      stock_asset:    toNumOrUndef(data.stock_asset),
+      cash_asset:     toNumOrUndef(data.cash_asset),
+      kr_asset:       toNumOrUndef(data.kr_asset),
+      us_asset:       toNumOrUndef(data.us_asset),
+      net_investment: toNumOrUndef(data.net_investment),
+      profit:         toNumOrUndef(data.profit),
+      return_rate:    toNumOrUndef(data.return_rate),
+      created_at:     String(data.created_at ?? ""),
+    };
+  } catch (e) {
+    console.error("[storage] getLatestAssetSnapshot 예외:", e);
+    return null;
+  }
+}
+
 export async function saveSnapshots(data: AssetSnapshot[]): Promise<void> {
   try {
     const { error: delErr } = await supabase
@@ -183,6 +219,16 @@ export async function saveSnapshots(data: AssetSnapshot[]): Promise<void> {
 /** snapshot_date 기준 upsert */
 export async function addSnapshot(item: AssetSnapshot): Promise<AssetSnapshot> {
   try {
+    const cashflows = await getCashflows();
+    const net =
+      item.net_investment != null
+        ? item.net_investment
+        : netInvestmentKrwFromCashflowsUpTo(cashflows, item.snapshot_date);
+    const { profit: p, return_rate: rr } = profitAndReturnRateFromTotalAndNet(
+      item.total_asset,
+      net
+    );
+
     const row = {
       snapshot_date:  item.snapshot_date,
       total_asset:    item.total_asset,
@@ -190,9 +236,9 @@ export async function addSnapshot(item: AssetSnapshot): Promise<AssetSnapshot> {
       cash_asset:     item.cash_asset ?? null,
       kr_asset:       item.kr_asset ?? null,
       us_asset:       item.us_asset ?? null,
-      net_investment: item.net_investment ?? null,
-      profit:         item.profit ?? null,
-      return_rate:    item.return_rate ?? null,
+      net_investment: net,
+      profit:         p,
+      return_rate:    rr,
       created_at:     item.created_at || new Date().toISOString(),
     };
 

@@ -2,6 +2,10 @@
 
 import { TrendingUp, TrendingDown, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import type { AssetSnapshot, Cashflow } from "@/types/assets";
+import {
+  netInvestmentKrwFromCashflowsUpTo,
+  todayDateStringKst,
+} from "@/lib/netInvestment";
 
 interface AssetSummaryCardsProps {
   snapshots: AssetSnapshot[];
@@ -84,17 +88,14 @@ export default function AssetSummaryCards({
   let totalWithdraw = 0;
 
   for (const cf of cashflows) {
-    if (cf.type === "WITHDRAW") {
-      totalWithdraw += cf.amount;
-    } else {
-      totalDeposit += cf.amount;
-    }
+    if (cf.type === "DEPOSIT") totalDeposit += cf.amount;
+    else if (cf.type === "WITHDRAW") totalWithdraw += cf.amount;
   }
 
-  // 순투자금: 스냅샷에 있으면 사용, 없으면 cashflow에서 계산
+  // 순투자금: 스냅샷에 있으면 사용, 없으면 DEPOSIT/WITHDRAW만 누적(배당 제외)
   const netInvestment =
     latest?.net_investment ??
-    (cashflows.length > 0 ? totalDeposit - totalWithdraw : null);
+    netInvestmentKrwFromCashflowsUpTo(cashflows, todayDateStringKst());
 
   const profit =
     latest?.profit ??
