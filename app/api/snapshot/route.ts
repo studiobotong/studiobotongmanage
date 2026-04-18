@@ -4,6 +4,7 @@
  */
 import { NextResponse } from "next/server";
 
+import { computeSnapshotInvestmentMetrics } from "@/lib/netInvestment";
 import {
   computeSnapshotSummary,
   fetchLatestHoldings,
@@ -13,6 +14,7 @@ import {
   snapshotDateSeoul,
   type SnapshotItemRow,
 } from "@/lib/snapshotAutoSave";
+import { getCashflows } from "@/lib/storage";
 import { supabase } from "@/lib/supabaseClient";
 
 export const dynamic = "force-dynamic";
@@ -146,6 +148,8 @@ export async function GET(request: Request) {
       const usdkrw_rate = await fetchUsdKrwForSnapshot(baseUrl);
       const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
       const summary = computeSnapshotSummary(holdings, usdkrw_rate);
+      const cashflows = await getCashflows();
+      const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
       const itemRows = holdingsToSnapshotItems(snapshotDate, holdings);
 
       const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
@@ -183,6 +187,9 @@ export async function GET(request: Request) {
               kr_asset: summary.kr_asset,
               us_asset: summary.us_asset,
               usdkrw_rate: usdkrw_rate,
+              net_investment: inv.net_investment,
+              profit: inv.profit,
+              return_rate: inv.return_rate,
             })
             .eq("snapshot_date", snapshotDate);
           if (updErr) {
@@ -207,6 +214,9 @@ export async function GET(request: Request) {
             kr_asset: summary.kr_asset,
             us_asset: summary.us_asset,
             usdkrw_rate: usdkrw_rate,
+            net_investment: inv.net_investment,
+            profit: inv.profit,
+            return_rate: inv.return_rate,
             created_at: new Date().toISOString(),
           });
           if (insertSummaryErr) {
@@ -243,6 +253,8 @@ export async function GET(request: Request) {
     const usdkrw_rate = await fetchUsdKrwForSnapshot(baseUrl);
     const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
     const summary = computeSnapshotSummary(holdings, usdkrw_rate);
+    const cashflows = await getCashflows();
+    const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
     const itemRows = holdingsToSnapshotItems(snapshotDate, holdings);
 
     const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
@@ -276,6 +288,9 @@ export async function GET(request: Request) {
       kr_asset: summary.kr_asset,
       us_asset: summary.us_asset,
       usdkrw_rate: usdkrw_rate,
+      net_investment: inv.net_investment,
+      profit: inv.profit,
+      return_rate: inv.return_rate,
       created_at: new Date().toISOString(),
     });
 

@@ -1,6 +1,9 @@
 /**
  * 일일 자동 스냅샷: 최신 holdings(asset_snapshot_holdings)와 환율로
  * 요약(asset_snapshots)·상세(asset_snapshot_items) 행을 생성합니다.
+ *
+ * 순투자금·수익·수익률(net_investment, profit, return_rate)은 cashflow 기준으로
+ * lib/netInvestment 의 computeSnapshotInvestmentMetrics 에서 계산합니다.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";

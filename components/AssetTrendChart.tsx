@@ -11,6 +11,10 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import type { AssetSnapshot } from "@/types/assets";
+import {
+  formatReturnRatePercentPoints,
+  snapshotReturnRatePercentForDisplay,
+} from "@/lib/netInvestment";
 
 // ---------------------------------------------------------------------------
 // Period type & aggregation
@@ -49,7 +53,9 @@ function aggregateByPeriod(
         : yearKey(snap.snapshot_date);
     map.set(key, snap);
   }
-  return Array.from(map.values());
+  return Array.from(map.values()).sort((a, b) =>
+    a.snapshot_date.localeCompare(b.snapshot_date)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -87,11 +93,13 @@ function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
   const snap = payload[0].payload;
   const totalAsset = snap.total_asset;
   const investment = snap.net_investment ?? 0;
-  const netProfit = investment > 0 ? totalAsset - investment : null;
-  const returnRate =
-    investment > 0 && netProfit !== null
-      ? (netProfit / investment) * 100
-      : null;
+  const fromDbProfit =
+    snap.profit != null && Number.isFinite(snap.profit) ? snap.profit : null;
+  let profit: number | null = fromDbProfit;
+  if (profit === null && investment > 0) {
+    profit = snap.total_asset - investment;
+  }
+  const returnRate = snapshotReturnRatePercentForDisplay(snap);
 
   return (
     <div className="bg-white border border-gray-100 rounded-xl shadow-lg px-4 py-3 text-sm min-w-[200px]">
@@ -107,42 +115,43 @@ function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
           </span>
         </div>
 
-        {investment > 0 && (
-          <div className="flex items-center justify-between gap-8">
-            <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-amber-400" />
-              <span className="text-xs text-gray-500">투자금</span>
-            </div>
-            <span className="text-sm font-semibold text-amber-600">
-              {formatKRW(investment)}
-            </span>
+        <div className="flex items-center justify-between gap-8">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-amber-400" />
+            <span className="text-xs text-gray-500">순투자금</span>
           </div>
-        )}
+          <span className="text-sm font-semibold text-amber-600">
+            {formatKRW(investment)}
+          </span>
+        </div>
 
-        {netProfit !== null && returnRate !== null && (
+        {(profit !== null || returnRate !== null) && (
           <div className="border-t border-gray-100 mt-2 pt-2 space-y-1.5">
-            <div className="flex items-center justify-between gap-8">
-              <span className="text-xs text-gray-500">순수익</span>
-              <span
-                className={`text-xs font-semibold ${
-                  netProfit >= 0 ? "text-emerald-600" : "text-rose-500"
-                }`}
-              >
-                {netProfit >= 0 ? "+" : ""}
-                {formatKRW(netProfit)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-8">
-              <span className="text-xs text-gray-500">수익률</span>
-              <span
-                className={`text-xs font-bold ${
-                  returnRate >= 0 ? "text-emerald-600" : "text-rose-500"
-                }`}
-              >
-                {returnRate >= 0 ? "+" : ""}
-                {returnRate.toFixed(2)}%
-              </span>
-            </div>
+            {profit !== null && (
+              <div className="flex items-center justify-between gap-8">
+                <span className="text-xs text-gray-500">손익</span>
+                <span
+                  className={`text-xs font-semibold ${
+                    profit >= 0 ? "text-emerald-600" : "text-rose-500"
+                  }`}
+                >
+                  {profit >= 0 ? "+" : ""}
+                  {formatKRW(profit)}
+                </span>
+              </div>
+            )}
+            {returnRate !== null && (
+              <div className="flex items-center justify-between gap-8">
+                <span className="text-xs text-gray-500">수익률</span>
+                <span
+                  className={`text-xs font-bold ${
+                    returnRate >= 0 ? "text-emerald-600" : "text-rose-500"
+                  }`}
+                >
+                  {formatReturnRatePercentPoints(returnRate)}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -161,31 +170,30 @@ interface AssetTrendChartProps {
 export default function AssetTrendChart({ snapshots }: AssetTrendChartProps) {
   const [period, setPeriod] = useState<Period>("daily");
 
-  const chartData = useMemo(
-    () => aggregateByPeriod(snapshots, period),
-    [snapshots, period]
-  );
-
-  // 투자금 라인이 의미있는 데이터인지 확인
-  const hasInvestment = useMemo(
-    () => chartData.some((d) => (d.net_investment ?? 0) > 0),
-    [chartData]
-  );
+  const chartData = useMemo(() => {
+    const sorted = [...snapshots].sort((a, b) =>
+      a.snapshot_date.localeCompare(b.snapshot_date)
+    );
+    const agg = aggregateByPeriod(sorted, period);
+    return agg.map((s) => ({
+      ...s,
+      net_investment: s.net_investment ?? 0,
+    }));
+  }, [snapshots, period]);
 
   const { yMin, yMax } = useMemo(() => {
     if (!chartData.length) return { yMin: 0, yMax: 0 };
-    const allValues = chartData.flatMap((d) =>
-      hasInvestment
-        ? [d.total_asset, d.net_investment ?? d.total_asset]
-        : [d.total_asset]
-    );
+    const allValues = chartData.flatMap((d) => [
+      d.total_asset,
+      d.net_investment,
+    ]);
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
     return {
       yMin: Math.floor(min * 0.97),
       yMax: Math.ceil(max * 1.03),
     };
-  }, [chartData, hasInvestment]);
+  }, [chartData]);
 
   const xTickFormatter = (date: string) => {
     if (period === "yearly") return date.slice(0, 4);
@@ -207,7 +215,7 @@ export default function AssetTrendChart({ snapshots }: AssetTrendChartProps) {
         <div>
           <h3 className="text-sm font-semibold text-gray-800">자산 변동 추이</h3>
           <p className="text-xs text-gray-400 mt-0.5">
-            KRW 기준 · {chartData.length}개 데이터
+            asset_snapshots · KRW · {chartData.length}개
           </p>
         </div>
 
@@ -235,19 +243,20 @@ export default function AssetTrendChart({ snapshots }: AssetTrendChartProps) {
           <div className="w-5 h-0.5 bg-[#5b6af4] rounded-full" />
           <span className="text-xs text-gray-500">총 자산</span>
         </div>
-        {hasInvestment && (
-          <div className="flex items-center gap-1.5">
-            <svg width="20" height="4" viewBox="0 0 20 4">
-              <line
-                x1="0" y1="2" x2="20" y2="2"
-                stroke="#f59e0b"
-                strokeWidth="2"
-                strokeDasharray="5 3"
-              />
-            </svg>
-            <span className="text-xs text-gray-500">투자금</span>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5">
+          <svg width="20" height="4" viewBox="0 0 20 4">
+            <line
+              x1="0"
+              y1="2"
+              x2="20"
+              y2="2"
+              stroke="#f59e0b"
+              strokeWidth="2"
+              strokeDasharray="5 3"
+            />
+          </svg>
+          <span className="text-xs text-gray-500">순투자금</span>
+        </div>
       </div>
 
       {/* Chart */}
@@ -293,18 +302,15 @@ export default function AssetTrendChart({ snapshots }: AssetTrendChartProps) {
                 dot={false}
                 activeDot={{ r: 4, fill: "#5b6af4", strokeWidth: 0 }}
               />
-              {/* 투자금 라인 (데이터 있을 때만) */}
-              {hasInvestment && (
-                <Line
-                  type="monotone"
-                  dataKey="net_investment"
-                  stroke="#f59e0b"
-                  strokeWidth={2}
-                  strokeDasharray="5 3"
-                  dot={false}
-                  activeDot={{ r: 4, fill: "#f59e0b", strokeWidth: 0 }}
-                />
-              )}
+              <Line
+                type="monotone"
+                dataKey="net_investment"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                strokeDasharray="5 3"
+                dot={false}
+                activeDot={{ r: 4, fill: "#f59e0b", strokeWidth: 0 }}
+              />
             </LineChart>
           </ResponsiveContainer>
         )}
