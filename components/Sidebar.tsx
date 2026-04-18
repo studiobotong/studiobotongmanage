@@ -54,14 +54,34 @@ const navItems = [
   },
 ];
 
-export default function Sidebar() {
+type SidebarProps = {
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
+};
+
+export default function Sidebar({ isMobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
 
+  const handleNavClick = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+      onMobileClose?.();
+    }
+  };
+
   return (
-    <aside className="fixed left-0 top-0 h-screen w-60 bg-white border-r border-gray-100 flex flex-col z-30">
+    <aside
+      id="mobile-sidebar-nav"
+      className={clsx(
+        "fixed left-0 top-0 z-50 flex h-full w-64 flex-col border-r border-gray-100 bg-white md:z-30",
+        "shadow-lg md:shadow-none",
+        "transition-transform duration-300 ease-out",
+        isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        isMobileOpen ? "pointer-events-auto" : "pointer-events-none md:pointer-events-auto"
+      )}
+    >
       {/* Logo */}
       <div className="px-6 py-5 border-b border-gray-100">
-        <Link href="/" className="flex items-center gap-2.5 group">
+        <Link href="/" className="flex items-center gap-2.5 group" onClick={handleNavClick}>
           <div className="w-8 h-8 rounded-xl bg-[#5b6af4] flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
             <Sparkles className="w-4 h-4 text-white" />
           </div>
@@ -89,6 +109,7 @@ export default function Sidebar() {
               <li key={item.href}>
                 <Link
                   href={item.href}
+                  onClick={handleNavClick}
                   className={clsx(
                     "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150",
                     isActive
