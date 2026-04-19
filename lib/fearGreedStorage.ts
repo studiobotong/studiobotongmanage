@@ -1,7 +1,6 @@
 /**
- * Fear & Greed 지수 — 브라우저 저장 + 수동 새로고침만 네트워크 조회.
- * (환율 USDKRW와 동일: value / lastUpdatedAt / status)
- * 데이터는 CNN 미국 주식 Fear & Greed만 허용합니다.
+ * Fear & Greed 지수 — DB `market_data_cache` 가 단일 소스입니다.
+ * (과거 브라우저 저장 로직은 제거되었습니다.)
  */
 
 import { CNN_FEAR_GREED_SOURCE_NAME } from "@/lib/cnnFearGreed";
@@ -18,11 +17,6 @@ export interface FearGreedState {
 
 /** 저장 레코드 출처 — 구버전(암호화폐 API 등) 값은 무시 */
 export const FEAR_GREED_DATA_SOURCE_CNN_US = "cnn_us" as const;
-
-const STORAGE_VALUE_KEY = "fearGreed_lastValue";
-const STORAGE_UPDATED_AT_KEY = "fearGreed_lastUpdatedAt";
-const STORAGE_INDEX_ASOF_KEY = "fearGreed_indexAsOfIso";
-const STORAGE_SOURCE_KEY = "fearGreed_dataSource";
 
 /** 저장 없을 때 방어자산 가이드 계산용 중립 기본값 */
 export const FEAR_GREED_FALLBACK_VALUE = 50;
@@ -42,7 +36,6 @@ export type FearGreedRefreshOk = {
   rawPayload: unknown;
   parsedLatestValue: number;
   indexDateIso: string | null;
-  /** 화면 반영 직전에 표시되던 값 (로그용, 호출부에서 넣음) */
   previousDisplayedValue: number;
 };
 
@@ -56,125 +49,10 @@ export type FearGreedRefreshResult =
       rawPayload?: unknown;
     };
 
-function parseValue(raw: string | null): number | null {
-  if (!raw) return null;
-  const n = parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
-  return n;
-}
-
-function parseAt(raw: string | null): Date | null {
-  if (!raw) return null;
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-function loadStoredSource(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const ls = localStorage.getItem(STORAGE_SOURCE_KEY);
-    const ss = sessionStorage.getItem(STORAGE_SOURCE_KEY);
-    return ls ?? ss;
-  } catch {
-    return null;
-  }
-}
-
-function loadStoredValue(): number | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const ls = parseValue(localStorage.getItem(STORAGE_VALUE_KEY));
-    if (ls != null) return ls;
-    return parseValue(sessionStorage.getItem(STORAGE_VALUE_KEY));
-  } catch {
-    return null;
-  }
-}
-
-function loadStoredUpdatedAt(): Date | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const lsAt = parseAt(localStorage.getItem(STORAGE_UPDATED_AT_KEY));
-    const ssAt = parseAt(sessionStorage.getItem(STORAGE_UPDATED_AT_KEY));
-    if (lsAt && ssAt) return lsAt.getTime() >= ssAt.getTime() ? lsAt : ssAt;
-    return lsAt ?? ssAt;
-  } catch {
-    return null;
-  }
-}
-
-function loadStoredIndexAsOf(): Date | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const lsAt = parseAt(localStorage.getItem(STORAGE_UPDATED_AT_KEY));
-    const ssAt = parseAt(sessionStorage.getItem(STORAGE_UPDATED_AT_KEY));
-    const lsIx = parseAt(localStorage.getItem(STORAGE_INDEX_ASOF_KEY));
-    const ssIx = parseAt(sessionStorage.getItem(STORAGE_INDEX_ASOF_KEY));
-    if (lsAt && ssAt) {
-      return lsAt.getTime() >= ssAt.getTime() ? lsIx : ssIx;
-    }
-    return lsIx ?? ssIx;
-  } catch {
-    return null;
-  }
-}
-
-function saveFearGreed(
-  value: number,
-  updatedAtIso: string,
-  indexAsOfIso: string | null
-): { ok: true } | { ok: false } {
-  if (typeof window === "undefined") return { ok: false };
-  const s = String(Math.round(value));
-  const ix = indexAsOfIso ?? "";
-  let ok = false;
-  try {
-    localStorage.setItem(STORAGE_VALUE_KEY, s);
-    localStorage.setItem(STORAGE_UPDATED_AT_KEY, updatedAtIso);
-    localStorage.setItem(STORAGE_SOURCE_KEY, FEAR_GREED_DATA_SOURCE_CNN_US);
-    if (ix) {
-      localStorage.setItem(STORAGE_INDEX_ASOF_KEY, ix);
-    } else {
-      localStorage.removeItem(STORAGE_INDEX_ASOF_KEY);
-    }
-    ok = true;
-  } catch {
-    /* sessionStorage 폴백 */
-  }
-  try {
-    sessionStorage.setItem(STORAGE_VALUE_KEY, s);
-    sessionStorage.setItem(STORAGE_UPDATED_AT_KEY, updatedAtIso);
-    sessionStorage.setItem(STORAGE_SOURCE_KEY, FEAR_GREED_DATA_SOURCE_CNN_US);
-    if (ix) {
-      sessionStorage.setItem(STORAGE_INDEX_ASOF_KEY, ix);
-    } else {
-      sessionStorage.removeItem(STORAGE_INDEX_ASOF_KEY);
-    }
-    ok = true;
-  } catch {
-    /* ignore */
-  }
-  return ok ? { ok: true } : { ok: false };
-}
-
 /**
- * 네트워크 없이 저장소만 읽습니다. 저장 없거나 CNN 미승인 데이터면 fallback 값·상태.
+ * 초기 렌더용. 실제 값은 `GET /api/market-data` 로 DB에서 로드합니다.
  */
 export function readStoredFearGreed(): FearGreedState {
-  const source = loadStoredSource();
-  const v = loadStoredValue();
-  const at = loadStoredUpdatedAt();
-  const ix = loadStoredIndexAsOf();
-
-  if (v != null && source === FEAR_GREED_DATA_SOURCE_CNN_US) {
-    return {
-      value: v,
-      lastUpdatedAt: at,
-      indexAsOf: ix,
-      status: "cached",
-    };
-  }
-
   return {
     value: FEAR_GREED_FALLBACK_VALUE,
     lastUpdatedAt: null,
@@ -183,104 +61,36 @@ export function readStoredFearGreed(): FearGreedState {
   };
 }
 
+/**
+ * Fear & Greed 새로고침 — 서버가 CNN 조회 후 DB에 저장합니다.
+ */
 export async function refreshFearGreedFromApi(
   previousDisplayedValue: number
 ): Promise<FearGreedRefreshResult> {
   try {
-    const res = await fetch("/api/fear-greed", { cache: "no-store" });
-    const text = await res.text();
-    let j: Record<string, unknown>;
-    try {
-      j = JSON.parse(text) as Record<string, unknown>;
-    } catch {
+    const { refreshFearGreedViaServer, syncOptionalBrowserCacheFromBundle } =
+      await import("./marketDataClient");
+    const res = await refreshFearGreedViaServer();
+    if (!res.ok) {
       return {
         ok: false,
-        error: "응답이 JSON이 아닙니다.",
+        error: res.error,
         previousDisplayedValue,
-        requestUrl: "/api/fear-greed",
+        requestUrl: CNN_FEAR_GREED_SOURCE_NAME,
       };
     }
-
-    const errRequestUrl =
-      typeof j.requestUrl === "string" ? j.requestUrl : undefined;
-
-    if (!res.ok || j.ok !== true) {
-      const err =
-        typeof j.error === "string"
-          ? j.error
-          : `HTTP ${res.status}`;
-      return {
-        ok: false,
-        error: err,
-        previousDisplayedValue,
-        requestUrl: errRequestUrl,
-        rawPayload: j.raw,
-      };
-    }
-
-    if (typeof j.value !== "number" || !Number.isFinite(j.value)) {
-      return {
-        ok: false,
-        error: "Fear & Greed 지수 파싱 실패",
-        previousDisplayedValue,
-      };
-    }
-
-    const value = Math.round(j.value);
-    if (value < 0 || value > 100) {
-      return {
-        ok: false,
-        error: "Fear & Greed 지수 범위 오류",
-        previousDisplayedValue,
-      };
-    }
-
-    const sourceName =
-      typeof j.source === "string" ? j.source : CNN_FEAR_GREED_SOURCE_NAME;
-    if (!sourceName.startsWith("CNN")) {
-      return {
-        ok: false,
-        error: "허용되지 않은 Fear & Greed 출처입니다.",
-        previousDisplayedValue,
-      };
-    }
-
-    const requestUrl =
-      typeof j.requestUrl === "string"
-        ? j.requestUrl
-        : "";
-
-    const rawIndexTs =
-      typeof j.indexTimestamp === "string" ? j.indexTimestamp : null;
-    const indexAsOf =
-      rawIndexTs && rawIndexTs.trim() ? new Date(rawIndexTs) : null;
-    const indexAsOfValid =
-      indexAsOf && !isNaN(indexAsOf.getTime()) ? indexAsOf : null;
-
-    const iso = new Date().toISOString();
-    const save = saveFearGreed(
-      value,
-      iso,
-      indexAsOfValid ? indexAsOfValid.toISOString() : null
-    );
-    if (!save.ok) {
-      return {
-        ok: false,
-        error: "로컬 저장에 실패했습니다.",
-        previousDisplayedValue,
-      };
-    }
-
+    syncOptionalBrowserCacheFromBundle(res.bundle);
+    const fg = res.bundle.fearGreed;
     return {
       ok: true,
-      value,
-      lastUpdatedAt: new Date(iso),
-      indexAsOf: indexAsOfValid,
-      sourceName,
-      requestUrl,
-      rawPayload: j.raw ?? j,
-      parsedLatestValue: value,
-      indexDateIso: indexAsOfValid ? indexAsOfValid.toISOString() : null,
+      value: fg.value,
+      lastUpdatedAt: fg.lastUpdatedAt ?? new Date(),
+      indexAsOf: fg.indexAsOf,
+      sourceName: CNN_FEAR_GREED_SOURCE_NAME,
+      requestUrl: "/api/market-data/refresh",
+      rawPayload: null,
+      parsedLatestValue: fg.value,
+      indexDateIso: fg.indexAsOf?.toISOString() ?? null,
       previousDisplayedValue,
     };
   } catch (e) {

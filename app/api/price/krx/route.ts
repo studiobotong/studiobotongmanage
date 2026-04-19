@@ -18,6 +18,8 @@ import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+const IS_DEV = process.env.NODE_ENV === "development";
+
 const NAVER_POLLING_BASE =
   "https://polling.finance.naver.com/api/realtime/domestic/stock";
 const TIMEOUT_MS = 8000;
@@ -57,7 +59,22 @@ async function fetchNaverKrxPrice(symbol: string): Promise<number | null> {
       return null;
     }
 
-    const data = await res.json();
+    const rawText = await res.text();
+    let data: { datas?: unknown[] };
+    try {
+      data = JSON.parse(rawText) as { datas?: unknown[] };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (IS_DEV) {
+        console.warn("[krx/route] 네이버 응답 JSON 파싱 실패", {
+          url,
+          status: res.status,
+          preview: rawText.slice(0, 200),
+          error: msg,
+        });
+      }
+      return null;
+    }
 
     // 원본 응답 로그 (길이 제한)
     console.log(
@@ -68,7 +85,13 @@ async function fetchNaverKrxPrice(symbol: string): Promise<number | null> {
     // 네이버 폴링 API 응답 구조:
     // { datas: [{ closePrice: "73600", openPrice: "...", ... }] }
     // closePrice: 장중에는 현재가, 장 종료 후에는 종가 (문자열, 쉼표 포함 가능)
-    const item = data?.datas?.[0];
+    const item = data?.datas?.[0] as
+      | {
+          closePrice?: string | number;
+          currentPrice?: string | number;
+          stockPrice?: string | number;
+        }
+      | undefined;
     if (!item) {
       console.warn("[krx/route] ✗ datas[0] not found for", symbol);
       return null;
@@ -107,23 +130,43 @@ async function fetchNaverKrxPrice(symbol: string): Promise<number | null> {
 }
 
 export async function GET(request: NextRequest) {
+  const requestUrl = request.url;
   const symbol = request.nextUrl.searchParams.get("symbol")?.trim() ?? "";
+
+  if (IS_DEV) {
+    console.log("[price/krx] GET", { requestUrl, symbol: symbol || "(empty)" });
+  }
 
   if (!symbol) {
     return Response.json(
-      { error: "symbol 파라미터가 필요합니다." },
+      { ok: false as const, error: "symbol 파라미터가 필요합니다." },
       { status: 400 }
     );
   }
 
-  const price = await fetchNaverKrxPrice(symbol);
-
-  return Response.json(
-    { symbol, price },
-    {
-      headers: {
-        "Cache-Control": "no-store",
-      },
+  try {
+    const price = await fetchNaverKrxPrice(symbol);
+    return Response.json(
+      { ok: true as const, symbol, price },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (IS_DEV) {
+      console.error("[price/krx] GET 예외", {
+        requestUrl,
+        symbol,
+        error: msg.slice(0, 300),
+        stack: e instanceof Error ? e.stack : undefined,
+      });
     }
-  );
+    return Response.json(
+      { ok: false as const, error: msg || "서버 오류" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
 }

@@ -5,6 +5,8 @@
 import { NextResponse } from "next/server";
 
 import { computeSnapshotInvestmentMetrics } from "@/lib/netInvestment";
+import { mergeQuotesIntoHoldings } from "@/lib/mergeQuotesIntoHoldings";
+import { fetchMarketDataBundleFromDb } from "@/lib/marketDataDb";
 import {
   computeSnapshotSummary,
   fetchLatestHoldings,
@@ -19,10 +21,12 @@ import { supabase } from "@/lib/supabaseClient";
 
 export const dynamic = "force-dynamic";
 
+const IS_DEV = process.env.NODE_ENV === "development";
+
 function missingEnvResponse() {
   return NextResponse.json(
     {
-      success: false,
+      ok: false as const,
       inserted: false,
       mode: "normal" as const,
       reason: "missing_env",
@@ -94,6 +98,10 @@ async function deleteAndInsertSnapshotItems(
  * - 저장 순서: 해당 일자 상세 삭제 → 상세 insert → 요약 insert (요약 실패 시 재시도 가능).
  */
 export async function GET(request: Request) {
+  if (IS_DEV) {
+    console.log("[snapshot] GET", { requestUrl: request.url });
+  }
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "";
   if (!url || !key) {
@@ -117,7 +125,7 @@ export async function GET(request: Request) {
     if (selectError) {
       return NextResponse.json(
         {
-          success: false,
+          ok: false as const,
           inserted: false,
           mode: repair ? ("repair" as const) : ("normal" as const),
           reason: "query_failed",
@@ -136,7 +144,7 @@ export async function GET(request: Request) {
         inserted_item_count: 0,
       });
       return NextResponse.json({
-        success: true,
+        ok: true as const,
         inserted: false,
         reason: "already_exists",
         mode: "normal" as const,
@@ -145,18 +153,20 @@ export async function GET(request: Request) {
     }
 
     if (repair) {
-      const usdkrw_rate = await fetchUsdKrwForSnapshot(baseUrl);
+      const usdkrw_rate = await fetchUsdKrwForSnapshot(supabase, baseUrl);
       const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
-      const summary = computeSnapshotSummary(holdings, usdkrw_rate);
+      const quoteBundle = await fetchMarketDataBundleFromDb(supabase);
+      const holdingsForCalc = mergeQuotesIntoHoldings(holdings, quoteBundle.quotes);
+      const summary = computeSnapshotSummary(holdingsForCalc, usdkrw_rate);
       const cashflows = await getCashflows();
       const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
-      const itemRows = holdingsToSnapshotItems(snapshotDate, holdings);
+      const itemRows = holdingsToSnapshotItems(snapshotDate, holdingsForCalc);
 
       const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
       if (!itemsResult.ok) {
         return NextResponse.json(
           {
-            success: false,
+            ok: false as const,
             inserted: false,
             mode: "repair" as const,
             reason: itemsResult.reason,
@@ -195,7 +205,7 @@ export async function GET(request: Request) {
           if (updErr) {
             return NextResponse.json(
               {
-                success: false,
+                ok: false as const,
                 inserted: false,
                 mode: "repair" as const,
                 reason: "update_summary_failed",
@@ -222,7 +232,7 @@ export async function GET(request: Request) {
           if (insertSummaryErr) {
             return NextResponse.json(
               {
-                success: false,
+                ok: false as const,
                 inserted: false,
                 mode: "repair" as const,
                 reason: "insert_summary_failed",
@@ -237,7 +247,7 @@ export async function GET(request: Request) {
       }
 
       return NextResponse.json({
-        success: true,
+        ok: true as const,
         inserted: true,
         reason: "repaired",
         mode: "repair" as const,
@@ -250,18 +260,20 @@ export async function GET(request: Request) {
       });
     }
 
-    const usdkrw_rate = await fetchUsdKrwForSnapshot(baseUrl);
+    const usdkrw_rate = await fetchUsdKrwForSnapshot(supabase, baseUrl);
     const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
-    const summary = computeSnapshotSummary(holdings, usdkrw_rate);
+    const quoteBundle = await fetchMarketDataBundleFromDb(supabase);
+    const holdingsForCalc = mergeQuotesIntoHoldings(holdings, quoteBundle.quotes);
+    const summary = computeSnapshotSummary(holdingsForCalc, usdkrw_rate);
     const cashflows = await getCashflows();
     const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
-    const itemRows = holdingsToSnapshotItems(snapshotDate, holdings);
+    const itemRows = holdingsToSnapshotItems(snapshotDate, holdingsForCalc);
 
     const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
     if (!itemsResult.ok) {
       return NextResponse.json(
         {
-          success: false,
+          ok: false as const,
           inserted: false,
           mode: "normal" as const,
           reason: itemsResult.reason,
@@ -297,7 +309,7 @@ export async function GET(request: Request) {
     if (insertSummaryErr) {
       return NextResponse.json(
         {
-          success: false,
+          ok: false as const,
           inserted: false,
           mode: "normal" as const,
           reason: "insert_summary_failed",
@@ -309,7 +321,7 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json({
-      success: true,
+      ok: true as const,
       inserted: true,
       reason: "inserted",
       mode: "normal" as const,
@@ -321,9 +333,18 @@ export async function GET(request: Request) {
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    if (IS_DEV) {
+      console.error("[snapshot] GET 예외", {
+        requestUrl: request.url,
+        error: message.slice(0, 400),
+        stack: e instanceof Error ? e.stack : undefined,
+      });
+    } else {
+      console.error("[snapshot] GET 예외", message.slice(0, 300));
+    }
     return NextResponse.json(
       {
-        success: false,
+        ok: false as const,
         inserted: false,
         mode: repair ? ("repair" as const) : ("normal" as const),
         reason: "unexpected_error",

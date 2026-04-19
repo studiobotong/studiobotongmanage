@@ -36,13 +36,19 @@ import {
   todayDateStringKst,
 } from "@/lib/netInvestment";
 import {
-  readStoredUsdKrwRate,
+  defaultUsdKrwRateState,
   refreshUsdKrwRateFromApi,
   saveManualUsdKrwRate,
   FX_REFRESH_FAILED_USER_MESSAGE,
   labelForFxRefreshFailure,
   type UsdKrwRateState,
 } from "@/lib/priceService";
+import { mergeQuotesIntoHoldings } from "@/lib/mergeQuotesIntoHoldings";
+import {
+  fetchMarketDataFromApi,
+  syncOptionalBrowserCacheFromBundle,
+} from "@/lib/marketDataClient";
+import { parseFetchJsonResponse } from "@/lib/safeFetchJson";
 import {
   readStoredFearGreed,
   refreshFearGreedFromApi,
@@ -202,7 +208,7 @@ export default function AssetPortfolioDashboard() {
     useState<AssetSnapshot | null>(null);
   const [cashflows, setCashflows] = useState<Cashflow[]>([]);
   const [usdKrw, setUsdKrw] = useState<UsdKrwRateState>(() =>
-    readStoredUsdKrwRate()
+    defaultUsdKrwRateState()
   );
   const [fxRefreshing, setFxRefreshing] = useState(false);
   const [fxError, setFxError] = useState<string | null>(null);
@@ -217,8 +223,14 @@ export default function AssetPortfolioDashboard() {
   const [fngRefreshing, setFngRefreshing] = useState(false);
   const [fngRefreshError, setFngRefreshError] = useState<string | null>(null);
 
-  const applyStoredRate = useCallback(() => {
-    setUsdKrw(readStoredUsdKrwRate());
+  const applyMarketDataFromDb = useCallback(async () => {
+    const bundle = await fetchMarketDataFromApi();
+    if (bundle) {
+      setUsdKrw(bundle.usdKrw);
+      setFng(bundle.fearGreed);
+      syncOptionalBrowserCacheFromBundle(bundle);
+    }
+    return bundle;
   }, []);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
@@ -229,18 +241,22 @@ export default function AssetPortfolioDashboard() {
       setFxError(null);
       setFngRefreshError(null);
     }
-    applyStoredRate();
-    setFng(readStoredFearGreed());
     try {
-      const [snaps, latestHoldings, flows, latestSnap] = await Promise.all([
+      const [bundle, snaps, latestHoldings, flows, latestSnap] = await Promise.all([
+        fetchMarketDataFromApi(),
         fetchAssetSnapshots(),
         getLatestSnapshotHoldings(),
         getCashflows(),
         getLatestAssetSnapshot(),
       ]);
+      if (bundle) {
+        setUsdKrw(bundle.usdKrw);
+        setFng(bundle.fearGreed);
+        syncOptionalBrowserCacheFromBundle(bundle);
+      }
       setSnapshots(snaps);
       setLatestSnapshotRow(latestSnap);
-      setHoldings(latestHoldings);
+      setHoldings(mergeQuotesIntoHoldings(latestHoldings, bundle?.quotes ?? {}));
       setCashflows(flows);
       setLastUpdated(new Date());
     } catch (e) {
@@ -254,7 +270,7 @@ export default function AssetPortfolioDashboard() {
         setLoading(false);
       }
     }
-  }, [applyStoredRate]);
+  }, []);
 
   const [snapshotRefreshLoading, setSnapshotRefreshLoading] = useState(false);
   const [snapshotRefreshBanner, setSnapshotRefreshBanner] = useState<{
@@ -266,15 +282,20 @@ export default function AssetPortfolioDashboard() {
     setSnapshotRefreshBanner(null);
     setSnapshotRefreshLoading(true);
     try {
-      const res = await fetch("/api/snapshot?repair=1&recalc_summary=1");
-      let data: Record<string, unknown> = {};
-      try {
-        data = (await res.json()) as Record<string, unknown>;
-      } catch {
-        /* ignore */
+      const requestUrl = "/api/snapshot?repair=1&recalc_summary=1";
+      const res = await fetch(requestUrl);
+      const parsed = await parseFetchJsonResponse<Record<string, unknown>>(
+        res,
+        requestUrl,
+        "snapshot repair+recalc"
+      );
+      if (!parsed.ok) {
+        setSnapshotRefreshBanner({ kind: "error", message: parsed.error });
+        return;
       }
-      const ok = res.ok && data.success === true;
-      if (!ok) {
+      const data = parsed.data;
+      const apiOk = res.ok && data.ok === true;
+      if (!apiOk) {
         const errMsg =
           typeof data.error === "string" && data.error
             ? data.error
@@ -324,11 +345,11 @@ export default function AssetPortfolioDashboard() {
     setFxManualSaving(false);
   }, []);
 
-  const handleManualFxSave = useCallback(() => {
+  const handleManualFxSave = useCallback(async () => {
     setFxManualError(null);
     setFxManualSaving(true);
     try {
-      const res = saveManualUsdKrwRate(fxManualInput.trim());
+      const res = await saveManualUsdKrwRate(fxManualInput.trim());
       if (res.ok) {
         setUsdKrw({
           rate: res.rate,
@@ -367,8 +388,7 @@ export default function AssetPortfolioDashboard() {
           status: "live",
         });
       } else {
-        // 실시간 조회 실패: localStorage 마지막 성공값·상태로 되돌림 (환율 숫자는 유지)
-        applyStoredRate();
+        await applyMarketDataFromDb();
         setFxError(
           res.error ??
             (res.reason
@@ -379,7 +399,7 @@ export default function AssetPortfolioDashboard() {
     } finally {
       setFxRefreshing(false);
     }
-  }, [applyStoredRate]);
+  }, [applyMarketDataFromDb]);
 
   const handleFearGreedRefresh = useCallback(async () => {
     const previousScreenValue = fng.value;
@@ -412,22 +432,22 @@ export default function AssetPortfolioDashboard() {
           rawPayload: res.rawPayload,
           previousScreenValue: res.previousDisplayedValue,
         });
-        const next = readStoredFearGreed();
-        setFng(next);
+        const bundle = await fetchMarketDataFromApi();
+        if (bundle) {
+          setUsdKrw(bundle.usdKrw);
+          setFng(bundle.fearGreed);
+          syncOptionalBrowserCacheFromBundle(bundle);
+        }
         setFngRefreshError(
-          next.status === "fallback"
-            ? FNG_REFRESH_FAILED_FALLBACK_MESSAGE
-            : FNG_REFRESH_FAILED_CACHED_MESSAGE
+          bundle && bundle.fearGreed.status !== "fallback"
+            ? FNG_REFRESH_FAILED_CACHED_MESSAGE
+            : FNG_REFRESH_FAILED_FALLBACK_MESSAGE
         );
       }
     } finally {
       setFngRefreshing(false);
     }
-  }, [fng.value]);
-
-  useEffect(() => {
-    applyStoredRate();
-  }, [applyStoredRate]);
+  }, [fng.value, applyMarketDataFromDb]);
 
   useEffect(() => {
     load();

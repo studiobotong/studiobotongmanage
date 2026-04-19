@@ -21,9 +21,15 @@ import {
 } from "@/lib/storage";
 import {
   batchGetPrices,
-  readStoredUsdKrwRate,
+  defaultUsdKrwRateState,
   type UsdKrwRateState,
 } from "@/lib/priceService";
+import { mergeQuotesIntoHoldings } from "@/lib/mergeQuotesIntoHoldings";
+import {
+  fetchMarketDataFromApi,
+  refreshQuotesViaServer,
+  syncOptionalBrowserCacheFromBundle,
+} from "@/lib/marketDataClient";
 import { groupRegularHoldings, type GroupedHolding } from "@/lib/holdingsGroup";
 import {
   computeAllocationSignal,
@@ -1419,40 +1425,19 @@ export default function HoldingsManager() {
   const [bondModalCurrency, setBondModalCurrency] = useState<"KRW" | "USD" | null>(null);
   const [priceRefreshing, setPriceRefreshing]     = useState(false);
   const [refreshFailedSymbols, setRefreshFailedSymbols] = useState<Set<string>>(new Set());
-  const [usdKrw, setUsdKrw] = useState<UsdKrwRateState>(() => readStoredUsdKrwRate());
+  const [usdKrw, setUsdKrw] = useState<UsdKrwRateState>(() => defaultUsdKrwRateState());
 
-  // ── 현재가 갱신 시각: localStorage에 영속 저장하여 페이지 이동 후에도 유지 ──
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(() => {
-    if (typeof window === "undefined") return null;
-    try {
-      const v = localStorage.getItem("holdings_last_refreshed_at");
-      return v ? new Date(v) : null;
-    } catch { return null; }
-  });
+  /** 마지막 시세 갱신 시각 — DB `market_data_cache` 기준과 동기 */
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
   const persistLastRefreshedAt = (d: Date) => {
     setLastRefreshedAt(d);
-    try { localStorage.setItem("holdings_last_refreshed_at", d.toISOString()); } catch { /* ignore */ }
   };
 
-  // 심볼별 마지막 갱신 시각 (수동 갱신 성공 시 기록)
-  const [symbolRefreshedAt, setSymbolRefreshedAt] = useState<Map<string, Date>>(() => {
-    if (typeof window === "undefined") return new Map();
-    try {
-      const raw = localStorage.getItem("holdings_symbol_refreshed_at");
-      if (!raw) return new Map();
-      const obj = JSON.parse(raw) as Record<string, string>;
-      return new Map(Object.entries(obj).map(([k, v]) => [k, new Date(v)]));
-    } catch { return new Map(); }
-  });
+  const [symbolRefreshedAt, setSymbolRefreshedAt] = useState<Map<string, Date>>(() => new Map());
 
   const persistSymbolRefreshedAt = (m: Map<string, Date>) => {
     setSymbolRefreshedAt(m);
-    try {
-      const obj: Record<string, string> = {};
-      m.forEach((v, k) => { obj[k] = v.toISOString(); });
-      localStorage.setItem("holdings_symbol_refreshed_at", JSON.stringify(obj));
-    } catch { /* ignore */ }
   };
 
   const snapshotDate = holdings.length > 0 ? holdings[0].snapshot_date : todayStr();
@@ -1472,19 +1457,36 @@ export default function HoldingsManager() {
         )[0].snapshot_date;
       }
 
-      const latest   = all.filter((h) => h.snapshot_date === latestDate);
+      const latest = all.filter((h) => h.snapshot_date === latestDate);
       const inserted = await ensureCashHoldings(latest, latestDate);
 
+      let rowsForDate: typeof latest;
       if (inserted) {
         const refreshed = await getSnapshotHoldings();
-        setHoldings(refreshed.filter((h) => h.snapshot_date === latestDate));
+        rowsForDate = refreshed.filter((h) => h.snapshot_date === latestDate);
       } else {
-        setHoldings(latest);
+        rowsForDate = latest;
       }
+
+      const bundle = await fetchMarketDataFromApi();
+      if (bundle) {
+        setUsdKrw(bundle.usdKrw);
+        syncOptionalBrowserCacheFromBundle(bundle);
+        if (bundle.lastQuoteRefreshAt) {
+          setLastRefreshedAt(bundle.lastQuoteRefreshAt);
+        }
+        if (bundle.quotesMeta) {
+          const m = new Map<string, Date>();
+          for (const [sym, meta] of Object.entries(bundle.quotesMeta)) {
+            if (meta.updatedAt) m.set(sym, meta.updatedAt);
+          }
+          setSymbolRefreshedAt(m);
+        }
+      }
+      setHoldings(mergeQuotesIntoHoldings(rowsForDate, bundle?.quotes ?? {}));
     } catch (e) {
       setError(e instanceof Error ? e.message : "데이터 로딩 실패");
     } finally {
-      setUsdKrw(readStoredUsdKrwRate());
       setLoading(false);
     }
   }, []);
@@ -1505,38 +1507,63 @@ export default function HoldingsManager() {
         return;
       }
 
-      const inputs = [
-        ...new Map(
-          stockHoldings
-            .filter((h) => h.symbol)
-            .map((h) => [
-              h.symbol!,
-              { symbol: h.symbol!, currency: h.currency ?? "KRW", market: h.market ?? undefined },
-            ])
-        ).values(),
-      ];
+      const beforePriceBySym = new Map<string, number>();
+      for (const h of stockHoldings) {
+        if (!h.symbol) continue;
+        const p = Number(h.current_price);
+        beforePriceBySym.set(h.symbol, Number.isFinite(p) ? p : 0);
+      }
 
-      const priceMap = await batchGetPrices(inputs);
-      const now      = new Date();
-      const failed   = new Set<string>();
+      const refreshRes = await refreshQuotesViaServer(true);
+      if (!refreshRes.ok) {
+        console.error("[Holdings] 시세 갱신 실패:", refreshRes.error);
+        setRefreshFailedSymbols(
+          new Set(stockHoldings.filter((h) => h.symbol).map((h) => h.symbol!))
+        );
+        await load();
+        return;
+      }
+
+      const priceMap = refreshRes.quotes;
+      const now = new Date();
+      const failed = new Set<string>();
       const newSymbolTimes = new Map<string, Date>();
 
       const uniqueSymbols = [
         ...new Set(stockHoldings.filter((h) => h.symbol).map((h) => h.symbol!)),
       ];
 
+      const freshRows = await getSnapshotHoldings();
+      let latestDate = snapshotDate;
+      if (freshRows.length > 0) {
+        latestDate = [...freshRows].sort((a, b) =>
+          b.snapshot_date.localeCompare(a.snapshot_date)
+        )[0].snapshot_date;
+      }
+      const afterPriceBySym = new Map<string, number>();
+      for (const h of freshRows) {
+        if (
+          h.snapshot_date !== latestDate ||
+          h.asset_type !== "STOCK" ||
+          !h.symbol
+        ) {
+          continue;
+        }
+        const p = Number(h.current_price);
+        afterPriceBySym.set(h.symbol, Number.isFinite(p) ? p : 0);
+      }
+
+      const quoteRefreshAt = refreshRes.bundle.lastQuoteRefreshAt ?? now;
+
       for (const sym of uniqueSymbols) {
         const newPrice = priceMap[sym];
-        if (newPrice != null && newPrice > 0) {
-          // 새 가격을 DB에 저장 (해당 심볼의 모든 계좌 row 업데이트)
-          const rowsForSym = stockHoldings.filter((h) => h.symbol === sym);
-          for (const row of rowsForSym) {
-            await updateHolding(row.id, {
-              current_price:    newPrice,
-              evaluated_amount: row.quantity * newPrice,
-            });
-          }
-          newSymbolTimes.set(sym, now);
+        const fromQuoteResponse = newPrice != null && newPrice > 0;
+        const before = beforePriceBySym.get(sym) ?? 0;
+        const after = afterPriceBySym.get(sym) ?? 0;
+        const holdingPriceUpdated = after > 0 && after !== before;
+
+        if (fromQuoteResponse || holdingPriceUpdated) {
+          newSymbolTimes.set(sym, quoteRefreshAt);
         } else {
           failed.add(sym);
         }
@@ -1544,7 +1571,8 @@ export default function HoldingsManager() {
 
       persistSymbolRefreshedAt(new Map([...symbolRefreshedAt, ...newSymbolTimes]));
       setRefreshFailedSymbols(failed);
-      persistLastRefreshedAt(now);
+      persistLastRefreshedAt(quoteRefreshAt);
+      syncOptionalBrowserCacheFromBundle(refreshRes.bundle);
       await load();
     } catch (e) {
       console.error("[Holdings] 시세 갱신 오류:", e);
