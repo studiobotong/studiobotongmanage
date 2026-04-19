@@ -1,3 +1,5 @@
+import { parseFetchJsonResponse } from "@/lib/safeFetchJson";
+
 /**
  * lib/quotes.ts
  *
@@ -38,7 +40,13 @@ export async function fetchKrxPrice(symbol: string): Promise<number | null> {
       return null;
     }
 
-    const data: { symbol: string; price: number | null } = await res.json();
+    type KrxBody =
+      | { ok: true; symbol: string; price: number | null }
+      | { ok: false; error: string };
+    const parsed = await parseFetchJsonResponse<KrxBody>(res, url, "fetchKrxPrice");
+    if (!parsed.ok) return null;
+    const data = parsed.data;
+    if (!data.ok) return null;
 
     console.log("[quotes] ▶ RAW response:", data);
     console.log("[quotes] ▶ FINAL current_price:", data.price);
@@ -55,13 +63,17 @@ export async function fetchKrxPrice(symbol: string): Promise<number | null> {
 
 export async function fetchUsPrice(symbol: string): Promise<number | null> {
   try {
-    const res = await fetch(
-      `/api/price?symbols=${encodeURIComponent(symbol)}`,
-      { cache: "no-store" }
-    );
+    const url = `/api/price?symbols=${encodeURIComponent(symbol)}`;
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
-    const data: Record<string, number | null> = await res.json();
-    const price = data[symbol];
+    type BatchBody =
+      | { ok: true; prices: Record<string, number | null> }
+      | { ok: false; error: string };
+    const parsed = await parseFetchJsonResponse<BatchBody>(res, url, "fetchUsPrice");
+    if (!parsed.ok) return null;
+    const env = parsed.data;
+    if (!env.ok) return null;
+    const price = env.prices[symbol];
     return price != null && price > 0 ? price : null;
   } catch {
     return null;

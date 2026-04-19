@@ -3,10 +3,9 @@
  *
  * 실시간 현재가 배치 조회 서비스.
  *
- * market 기준으로 소스를 분기합니다:
- *   KRX  → quotes.fetchKrxPrice()  (네이버 금융 실시간 폴링 API → /api/price/krx)
- *   US   → Yahoo Finance /api/price (심볼 배치 조회)
- *   CASH → 고정 단가 또는 조회 생략
+ * 일괄 시세 새로고침은 서버 `/api/market-data/refresh` + `fromHoldings` 가 holdings 기준으로
+ * `market_data_cache` 를 갱신합니다. 폼에서 단일 종목 조회는 `/api/price` 직접 호출로
+ * 캐시에 없는 신규 심볼도 조회할 수 있습니다.
  *
  * 조회 실패 종목은 result 에 포함하지 않음 → UI에서 "조회 실패" 표시
  * (MOCK_PRICES 자동 폴백은 의도적으로 비활성화 — 잘못된 가격을 정상 시세처럼
@@ -14,9 +13,9 @@
  */
 
 // MOCK_PRICES는 환율(USDKRW) 폴백 전용으로만 사용합니다.
-import { MOCK_PRICES } from "./mockPrices";
-import { fetchKrxPrice } from "./quotes";
+import { parseFetchJsonResponse } from "@/lib/safeFetchJson";
 
+import { MOCK_PRICES } from "./mockPrices";
 // 현금·채권 등 실제 API 조회가 불필요한 심볼
 const FIXED_PRICE_SYMBOLS: Record<string, number> = {
   KRW_CASH: 1,
@@ -43,19 +42,13 @@ export function toYahooSymbol(symbol: string, currency: string): string {
   return symbol;
 }
 
-function fromYahooSymbol(yahooSymbol: string): string {
-  if (yahooSymbol.endsWith(".KS") || yahooSymbol.endsWith(".KQ")) {
-    return yahooSymbol.slice(0, -3);
-  }
-  return yahooSymbol;
-}
-
 /** market 필드 또는 currency/symbol 패턴으로 시장을 분류합니다. */
-function classifyMarket(h: PriceInput): "KRX" | "US" | "CASH" | "UNKNOWN" {
-  if (h.market === "KRX")  return "KRX";
-  if (h.market === "US")   return "US";
+export function classifyPriceInputMarket(
+  h: PriceInput
+): "KRX" | "US" | "CASH" | "UNKNOWN" {
+  if (h.market === "KRX") return "KRX";
+  if (h.market === "US") return "US";
   if (h.market === "CASH") return "CASH";
-  // market 미지정 시 heuristic (하위 호환)
   if (!h.market) {
     if (h.currency === "KRW" && /^\d{6}$/.test(h.symbol)) return "KRX";
     if (h.currency === "USD") return "US";
@@ -63,11 +56,14 @@ function classifyMarket(h: PriceInput): "KRX" | "US" | "CASH" | "UNKNOWN" {
   return "UNKNOWN";
 }
 
+function classifyMarket(h: PriceInput): "KRX" | "US" | "CASH" | "UNKNOWN" {
+  return classifyPriceInputMarket(h);
+}
+
 /**
  * 여러 종목 현재가를 market 기준으로 분기하여 일괄 조회합니다.
  *
- * - KRX  : fetchKrxPrice() 개별 호출 (네이버 금융 실시간 폴링 API)
- * - US   : Yahoo Finance /api/price 배치 조회
+ * - KRX/US: 서버에서 네이버·Yahoo 등 조회 후 DB 캐시
  * - CASH : 고정 단가(1) 또는 FIXED_PRICE_SYMBOLS
  *
  * @returns symbol → 현재가 맵 (조회 실패 종목은 누락)
@@ -90,8 +86,8 @@ export async function batchGetPrices(
   if (toFetch.length === 0) return result;
 
   // 2. market 기준 분류
-  const krxItems:  PriceInput[] = [];
-  const usItems:   PriceInput[] = [];
+  const krxItems: PriceInput[] = [];
+  const usItems: PriceInput[] = [];
 
   for (const h of toFetch) {
     const mkt = classifyMarket(h);
@@ -105,51 +101,69 @@ export async function batchGetPrices(
     }
   }
 
-  // 3. KRX: 개별 조회 (네이버 금융 실시간 폴링 API)
-  if (krxItems.length > 0) {
-    await Promise.all(
-      krxItems.map(async (h) => {
-        const price = await fetchKrxPrice(h.symbol);
-        if (price != null && price > 0) {
-          result[h.symbol] = price;
-        }
-        // null → result에 추가 안 함 → UI "조회 실패"
-      })
-    );
+  // 2b~4. holdings에 없는 신규 종목 등 — `/api/price` 직접 조회 (market_data_cache 목록과 무관)
+  async function fetchKrxClient(symbol: string): Promise<number | null> {
+    const url = `/api/price/krx?symbol=${encodeURIComponent(symbol)}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    type KrxBody =
+      | { ok: true; symbol: string; price: number | null }
+      | { ok: false; error: string };
+    const parsed = await parseFetchJsonResponse<KrxBody>(res, url, "batchGetPrices/krx");
+    if (!parsed.ok) return null;
+    const data = parsed.data;
+    if (!data.ok) return null;
+    const p = data.price;
+    return typeof p === "number" && p > 0 ? p : null;
   }
 
-  // 4. US: Yahoo Finance 배치 조회
+  function fromYahooSymbol(yahooSymbol: string): string {
+    if (yahooSymbol.endsWith(".KS") || yahooSymbol.endsWith(".KQ")) {
+      return yahooSymbol.slice(0, -3);
+    }
+    return yahooSymbol;
+  }
+
+  async function fetchUsBatchClient(
+    items: PriceInput[]
+  ): Promise<Record<string, number | null>> {
+    if (items.length === 0) return {};
+    const yahooSymbols = [...new Set(items.map((h) => toYahooSymbol(h.symbol, h.currency)))];
+    const url = `/api/price?symbols=${encodeURIComponent(yahooSymbols.join(","))}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return {};
+    type BatchBody =
+      | { ok: true; prices: Record<string, number | null> }
+      | { ok: false; error: string };
+    const parsed = await parseFetchJsonResponse<BatchBody>(
+      res,
+      url,
+      "batchGetPrices/usBatch"
+    );
+    if (!parsed.ok) return {};
+    const envelope = parsed.data;
+    if (!envelope.ok) return {};
+    const data = envelope.prices;
+    const out: Record<string, number | null> = {};
+    for (const [yahooSym, price] of Object.entries(data)) {
+      out[fromYahooSymbol(yahooSym)] = price;
+    }
+    return out;
+  }
+
+  for (const h of krxItems) {
+    const p = await fetchKrxClient(h.symbol);
+    if (p != null && p > 0) result[h.symbol] = p;
+  }
+
   if (usItems.length > 0) {
-    const yahooSymbols = [
-      ...new Set(usItems.map((h) => toYahooSymbol(h.symbol, h.currency))),
-    ];
-
-    const reqUrl = `/api/price?symbols=${encodeURIComponent(yahooSymbols.join(","))}`;
-
-    try {
-      const res = await fetch(reqUrl, { cache: "no-store" });
-      if (res.ok) {
-        const data: Record<string, number | null> = await res.json();
-        for (const [yahooSym, price] of Object.entries(data)) {
-          const internalSym = fromYahooSymbol(yahooSym);
-          if (price != null && price > 0) {
-            result[internalSym] = price;
-          }
-        }
-      } else {
-        console.warn(
-          "[priceService] ✗ /api/price returned non-ok:",
-          res.status,
-          "for symbols:",
-          yahooSymbols
-        );
-      }
-    } catch (err) {
-      console.error("[priceService] ✗ fetch error for US symbols:", err);
+    const batch = await fetchUsBatchClient(usItems);
+    for (const h of usItems) {
+      const p = batch[h.symbol];
+      if (p != null && p > 0) result[h.symbol] = p;
     }
   }
 
-  // 조회 실패 심볼은 result에 없음 → 호출 측에서 undefined 로 "조회 실패" 처리
   return result;
 }
 
@@ -170,57 +184,7 @@ export interface UsdKrwRateState {
   status: RateStatus;
 }
 
-/** localStorage 키 — 마지막 성공 환율 지속 보관 */
-const LAST_RATE_STORAGE_KEY = "usdKrw_lastSuccessRate";
-/** 마지막으로 환율을 저장한 시각 (ISO 문자열) — 클라이언트에서의 “last_success_at” */
-const LAST_RATE_UPDATED_AT_KEY = "usdKrw_lastUpdatedAt";
-/** 직접 입력(manual) vs API 저장(api) — UI 문구 분기용 */
-const LAST_RATE_SOURCE_KEY = "usdKrw_rateSource";
-
-export type StoredUsdKrwSource = "manual" | "api";
-
-/**
- * 유효한 숫자 환율일 때만 저장합니다. API 실패·파싱 실패 경로에서는 호출하지 않습니다.
- * localStorage 실패 시 sessionStorage에도 기록해 last_success_at 누락을 줄입니다.
- */
-function saveLastRate(
-  rate: unknown,
-  updatedAtIso?: string,
-  source: StoredUsdKrwSource = "api"
-): { ok: true } | { ok: false; error: string } {
-  if (typeof rate !== "number" || Number.isNaN(rate) || rate <= 100) {
-    return { ok: false, error: "invalid_rate" };
-  }
-  if (typeof window === "undefined") {
-    return { ok: false, error: "no_window" };
-  }
-  const iso = updatedAtIso ?? new Date().toISOString();
-  let okLs = false;
-  let okSs = false;
-  let err = "";
-  try {
-    localStorage.setItem(LAST_RATE_STORAGE_KEY, String(rate));
-    localStorage.setItem(LAST_RATE_UPDATED_AT_KEY, iso);
-    localStorage.setItem(LAST_RATE_SOURCE_KEY, source);
-    okLs = true;
-  } catch (e) {
-    err = e instanceof Error ? e.message : String(e);
-  }
-  try {
-    sessionStorage.setItem(LAST_RATE_STORAGE_KEY, String(rate));
-    sessionStorage.setItem(LAST_RATE_UPDATED_AT_KEY, iso);
-    sessionStorage.setItem(LAST_RATE_SOURCE_KEY, source);
-    okSs = true;
-  } catch (e2) {
-    if (!okLs) {
-      err = err || (e2 instanceof Error ? e2.message : String(e2));
-    }
-  }
-  if (okLs || okSs) return { ok: true };
-  return { ok: false, error: err || "storage_failed" };
-}
-
-function coerceUsdKrwNumber(v: unknown): number | null {
+export function coerceUsdKrwNumber(v: unknown): number | null {
   if (typeof v === "number" && !Number.isNaN(v) && v > 100) return v;
   if (typeof v === "string") {
     const n = parseFloat(v.replace(/,/g, ""));
@@ -229,8 +193,8 @@ function coerceUsdKrwNumber(v: unknown): number | null {
   return null;
 }
 
-/** API JSON에서 USDKRW 환율 추출 (키 불일치·문자열 숫자 대비) */
-function extractUsdKrwFromPayload(
+/** API JSON에서 USDKRW 환율 추출 (키 불일치·문자열 숫자 대비) — 서버 라우트에서도 사용 */
+export function extractUsdKrwFromPayload(
   data: Record<string, unknown>,
   expectedKey: string
 ): { rate: number | null; pickedKey?: string } {
@@ -244,93 +208,48 @@ function extractUsdKrwFromPayload(
   return { rate: null };
 }
 
-function parseStoredRate(raw: string | null): number | null {
-  if (!raw) return null;
-  const v = parseFloat(raw);
-  return isNaN(v) || v <= 100 ? null : v;
-}
-
-function parseStoredAt(raw: string | null): Date | null {
-  if (!raw) return null;
-  const d = new Date(raw);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-/** localStorage 우선, 없으면 sessionStorage (동일 브라우저 세션 내 백업) */
-function loadLastRate(): number | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const fromLs = parseStoredRate(localStorage.getItem(LAST_RATE_STORAGE_KEY));
-    if (fromLs != null) return fromLs;
-    return parseStoredRate(sessionStorage.getItem(LAST_RATE_STORAGE_KEY));
-  } catch {
-    return null;
-  }
-}
-
-function loadLastRateUpdatedAt(): Date | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const lsAt = parseStoredAt(localStorage.getItem(LAST_RATE_UPDATED_AT_KEY));
-    const ssAt = parseStoredAt(sessionStorage.getItem(LAST_RATE_UPDATED_AT_KEY));
-    if (lsAt && ssAt) return lsAt.getTime() >= ssAt.getTime() ? lsAt : ssAt;
-    return lsAt ?? ssAt;
-  } catch {
-    return null;
-  }
-}
-
-function loadLastRateSource(): StoredUsdKrwSource | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const ls = localStorage.getItem(LAST_RATE_SOURCE_KEY);
-    const ss = sessionStorage.getItem(LAST_RATE_SOURCE_KEY);
-    const v = ls ?? ss;
-    if (v === "manual" || v === "api") return v;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * 페이지 로드 시 사용: 네트워크 호출 없이 저장소(또는 저장 없을 때만 MOCK 폴백)만 읽습니다.
- * 저장된 환율이 있으면 항상 그것을 쓰고 status는 cached입니다.
+ * 초기 렌더용(동기). 실제 값은 `GET /api/market-data` 로 DB에서 로드합니다.
+ * 브라우저 저장은 사용하지 않습니다.
  */
-export function readStoredUsdKrwRate(): UsdKrwRateState {
-  const lastRate = loadLastRate();
-  const lastUpdatedAt = loadLastRateUpdatedAt();
-  if (lastRate != null) {
-    const src = loadLastRateSource();
-    const status: RateStatus = src === "manual" ? "manual" : "cached";
-    return { rate: lastRate, lastUpdatedAt, status };
-  }
+export function defaultUsdKrwRateState(): UsdKrwRateState {
   const fallbackRate = MOCK_PRICES["USDKRW"] ?? 1460;
   return { rate: fallbackRate, lastUpdatedAt: null, status: "fallback" };
 }
 
+/** @deprecated 이름 호환 — `defaultUsdKrwRateState` 와 동일 (localStorage 미사용) */
+export function readStoredUsdKrwRate(): UsdKrwRateState {
+  return defaultUsdKrwRateState();
+}
+
 /**
- * 사용자가 입력한 USD/KRW 환율을 저장합니다 (브라우저 localStorage + sessionStorage 백업).
- * 성공 시 대시보드에서 status "manual" 로 반영하면 됩니다.
+ * 수동 환율 — 서버 `market_data_cache` 에 저장합니다.
  */
-export function saveManualUsdKrwRate(
+export async function saveManualUsdKrwRate(
   rate: unknown
-):
+): Promise<
   | { ok: true; rate: number; lastUpdatedAt: Date }
-  | { ok: false; error: string } {
+  | { ok: false; error: string }
+> {
   const n = coerceUsdKrwNumber(rate);
   if (n == null) {
     return { ok: false, error: "100보다 큰 유효한 환율을 입력해 주세요." };
   }
-  const iso = new Date().toISOString();
-  const saveResult = saveLastRate(n, iso, "manual");
-  if (!saveResult.ok) {
+  const { saveManualUsdKrwViaServer, syncOptionalBrowserCacheFromBundle } =
+    await import("./marketDataClient");
+  const res = await saveManualUsdKrwViaServer(n);
+  if (!res.ok) {
     return {
       ok: false,
-      error: "저장에 실패했습니다. 브라우저 저장소 설정을 확인해 주세요.",
+      error: res.error || "서버에 환율을 저장하지 못했습니다.",
     };
   }
-  return { ok: true, rate: n, lastUpdatedAt: new Date(iso) };
+  syncOptionalBrowserCacheFromBundle(res.bundle);
+  return {
+    ok: true,
+    rate: n,
+    lastUpdatedAt: res.bundle.usdKrw.lastUpdatedAt ?? new Date(),
+  };
 }
 
 /** 클라이언트 환율 새로고침 실패 시 사용자에게 보여줄 기본 안내 (저장값 유지 전제) */
@@ -363,15 +282,14 @@ export function labelForFxRefreshFailure(
     case "rate_invalid":
       return "파싱 실패 · 유효한 환율 숫자 없음";
     case "storage_failed":
-      return "저장 실패 · localStorage";
+      return "저장 실패 · DB";
     default:
       return FX_REFRESH_FAILED_USER_MESSAGE;
   }
 }
 
 /**
- * "달러 새로고침" 전용: API로만 조회하고, 성공 시에만 저장합니다.
- * 실패 시 저장값을 바꾸지 않으므로, 호출 측은 기존 state를 유지하면 됩니다.
+ * 달러 새로고침 — 서버가 외부 조회 후 `market_data_cache` 에 저장합니다.
  */
 export async function refreshUsdKrwRateFromApi(): Promise<
   | { ok: true; rate: number; lastUpdatedAt: Date }
@@ -380,128 +298,28 @@ export async function refreshUsdKrwRateFromApi(): Promise<
       error: string;
       reason?: RefreshUsdKrwFailureReason;
       httpStatus?: number;
-      /** 디버그용: 응답 본문 앞부분 또는 파싱된 payload 요약 */
       detail?: string;
     }
 > {
-  const symbol = "USDKRW=X";
-  const reqUrl = `/api/price?symbols=${encodeURIComponent(symbol)}`;
-  const absoluteUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}${reqUrl}`
-      : reqUrl;
-
   try {
-    console.log("[FX_TRACE][2] 클라이언트 요청 URL:", { reqUrl, absoluteUrl });
-
-    const res = await fetch(reqUrl, { cache: "no-store" });
-    const httpStatus = res.status;
-    const text = await res.text();
-
-    console.log("[FX_TRACE][7] 클라이언트 수신 HTTP status:", httpStatus);
-    console.log("[FX_TRACE][8] 클라이언트 raw 응답 본문 (앞 1200자):", text.slice(0, 1200));
-
+    const { refreshUsdKrwViaServer, syncOptionalBrowserCacheFromBundle } =
+      await import("./marketDataClient");
+    const res = await refreshUsdKrwViaServer();
     if (!res.ok) {
-      console.warn("[refreshUsdKrwRateFromApi] HTTP 비정상 (본문은 JSON 아닐 수 있음)", {
-        reqUrl,
-        httpStatus,
-        bodyPreview: text.slice(0, 500),
-      });
       return {
         ok: false,
-        error: labelForFxRefreshFailure("http_error"),
+        error: res.error,
         reason: "http_error",
-        httpStatus,
-        detail: text.slice(0, 200),
       };
     }
-
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(text) as Record<string, unknown>;
-    } catch (parseErr) {
-      console.warn("[refreshUsdKrwRateFromApi] JSON 파싱 실패", {
-        reqUrl,
-        httpStatus,
-        bodyPreview: text.slice(0, 400),
-        parseErr,
-      });
-      return {
-        ok: false,
-        error: labelForFxRefreshFailure("parse_error"),
-        reason: "parse_error",
-        httpStatus,
-        detail: text.slice(0, 200),
-      };
-    }
-
-    const { rate, pickedKey } = extractUsdKrwFromPayload(data, symbol);
-    console.log("[FX_TRACE][9] 클라이언트 파싱 환율값:", {
-      expectedKey: symbol,
-      pickedKey,
-      rate,
-      allKeys: Object.keys(data),
-    });
-
-    if (rate == null) {
-      const rawVal = data[symbol];
-      console.warn("[refreshUsdKrwRateFromApi] 환율 null 또는 추출 불가", {
-        reqUrl,
-        httpStatus,
-        parsedPayload: data,
-        rawForExpectedKey: rawVal,
-      });
-      return {
-        ok: false,
-        error: labelForFxRefreshFailure(
-          rawVal === null || rawVal === undefined ? "server_null" : "rate_invalid"
-        ),
-        reason: rawVal === null || rawVal === undefined ? "server_null" : "rate_invalid",
-        httpStatus,
-        detail: JSON.stringify(data),
-      };
-    }
-
-    const iso = new Date().toISOString();
-    const saveResult = saveLastRate(rate, iso, "api");
-    if (!saveResult.ok) {
-      console.warn("[FX_TRACE][10][11] saveLastRate 실패", saveResult);
-      return {
-        ok: false,
-        error: labelForFxRefreshFailure("storage_failed"),
-        reason: "storage_failed",
-        httpStatus,
-        detail: saveResult.error,
-      };
-    }
-    console.log("[FX_TRACE][10] saveLastRate 실행됨:", { rate, iso });
-    try {
-      const verify = localStorage.getItem(LAST_RATE_STORAGE_KEY);
-      const verifyAt = localStorage.getItem(LAST_RATE_UPDATED_AT_KEY);
-      const verifySs = sessionStorage.getItem(LAST_RATE_STORAGE_KEY);
-      const verifySsAt = sessionStorage.getItem(LAST_RATE_UPDATED_AT_KEY);
-      console.log("[FX_TRACE][11] 저장 확인:", {
-        usdKrw_lastSuccessRate: verify ?? verifySs,
-        usdKrw_lastUpdatedAt: verifyAt ?? verifySsAt,
-      });
-    } catch (e) {
-      console.warn("[FX_TRACE][11] 저장소 읽기 확인 실패:", e);
-    }
-
-    console.log("[refreshUsdKrwRateFromApi] 성공", {
-      reqUrl,
-      httpStatus,
-      symbol,
-      pickedKey,
-      finalExchangeRate: rate,
-      lastSuccessAtIso: iso,
-    });
-    return { ok: true, rate, lastUpdatedAt: new Date(iso) };
+    syncOptionalBrowserCacheFromBundle(res.bundle);
+    const u = res.bundle.usdKrw;
+    return {
+      ok: true,
+      rate: u.rate,
+      lastUpdatedAt: u.lastUpdatedAt ?? new Date(),
+    };
   } catch (err) {
-    console.error("[refreshUsdKrwRateFromApi] 네트워크/요청 오류", {
-      reqUrl,
-      err,
-    });
     return {
       ok: false,
       error: labelForFxRefreshFailure("network"),

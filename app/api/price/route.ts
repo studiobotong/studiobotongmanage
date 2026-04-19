@@ -3,6 +3,44 @@ import { NextRequest } from "next/server";
 // 항상 동적으로 실행 (정적 최적화 방지)
 export const dynamic = "force-dynamic";
 
+const IS_DEV = process.env.NODE_ENV === "development";
+
+/** Yahoo 등 외부 HTTP 응답: text → JSON (빈 본문·깨진 JSON 안전 처리) */
+async function readJsonFromExternalResponse(
+  res: Response,
+  label: string,
+  requestUrl: string
+): Promise<unknown | null> {
+  const text = await res.text();
+  const preview = text.slice(0, 200);
+  if (!text.trim()) {
+    if (IS_DEV) {
+      console.warn("[price/route] 외부 API 빈 본문", {
+        label,
+        requestUrl,
+        status: res.status,
+      });
+    }
+    return null;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (IS_DEV) {
+      console.warn("[price/route] 외부 API JSON 파싱 실패", {
+        label,
+        requestUrl,
+        status: res.status,
+        contentType: res.headers.get("content-type"),
+        preview,
+        error: msg,
+      });
+    }
+    return null;
+  }
+}
+
 const YAHOO_V8_BASE   = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_V7_QUOTE  = "https://query2.finance.yahoo.com/v7/finance/quote";
 const YAHOO_CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb";
@@ -112,9 +150,25 @@ async function fetchViaChart(
       return null;
     }
 
-    const data = await res.json();
-    const result0 = data?.chart?.result?.[0];
-    const meta    = result0?.meta;
+    const data = (await readJsonFromExternalResponse(res, "v8/chart", url)) as {
+      chart?: { result?: unknown[]; error?: unknown };
+    } | null;
+    if (!data) return null;
+    const result0 = data?.chart?.result?.[0] as
+      | {
+          meta?: {
+            symbol?: string;
+            regularMarketPrice?: number | null;
+            chartPreviousClose?: number | null;
+            previousClose?: number | null;
+            regularMarketTime?: number;
+            currency?: string;
+            exchangeName?: string;
+            instrumentType?: string;
+          };
+        }
+      | undefined;
+    const meta = result0?.meta;
 
     if (isDebug) {
       console.log("[price/route] ▶ chart.error:", data?.chart?.error);
@@ -202,8 +256,16 @@ async function fetchViaYahooQuote(
     }
     if (!res.ok) return null;
 
-    const data = await res.json();
-    const quote = data?.quoteResponse?.result?.[0];
+    const data = (await readJsonFromExternalResponse(res, "v7/quote", url)) as {
+      quoteResponse?: { result?: unknown[] };
+    } | null;
+    if (!data) return null;
+    const quote = data?.quoteResponse?.result?.[0] as
+      | {
+          regularMarketPrice?: number | null;
+          regularMarketPreviousClose?: number | null;
+        }
+      | undefined;
     if (!quote) return null;
 
     const price =
@@ -474,63 +536,89 @@ async function fetchOnePrice(
 // ── API 핸들러 ────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
+  const requestUrl = request.url;
   const raw = request.nextUrl.searchParams.get("symbols") ?? "";
   const symbols = raw
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
+  if (IS_DEV) {
+    console.log("[price/route] GET", { requestUrl, symbolCount: symbols.length });
+  }
+
   if (symbols.length === 0) {
-    return Response.json({});
+    return Response.json(
+      { ok: true as const, prices: {} as Record<string, number | null> },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   }
 
-  // Yahoo 세션(crumb + cookie) 먼저 확보 — 실패해도 계속 진행
-  const session = await getYahooSession();
-  if (!session) {
-    console.warn("[price/route] ⚠ Yahoo 세션 없음 — Stooq fallback이 작동합니다");
-  }
-
-  const settled = await Promise.allSettled(
-    symbols.map(async (symbol) => {
-      try {
-        const price = await fetchOnePrice(symbol, session);
-        const body = { symbol, price: price ?? null } as const;
-        const logDetail =
-          isUsdKrwYahooSymbol(symbol) || symbols.length <= 5;
-        if (logDetail) {
-          console.log("[price/route] GET 결과", {
-            symbol,
-            price: body.price,
-            usedFallback: body.price == null,
-            note: body.price == null
-              ? "모든 소스가 null — 클라이언트는 마지막 저장값 사용"
-              : "ok",
-          });
-        }
-        return body;
-      } catch (err) {
-        console.error("[price/route] ✗ fetchOnePrice 예외 | symbol:", symbol, err);
-        return { symbol, price: null };
-      }
-    })
-  );
-
-  const prices: Record<string, number | null> = {};
-  for (const r of settled) {
-    if (r.status === "fulfilled") {
-      prices[r.value.symbol] = r.value.price;
+  try {
+    // Yahoo 세션(crumb + cookie) 먼저 확보 — 실패해도 계속 진행
+    const session = await getYahooSession();
+    if (!session) {
+      console.warn("[price/route] ⚠ Yahoo 세션 없음 — Stooq fallback이 작동합니다");
     }
-  }
 
-  if (symbols.length <= 5 || symbols.some((s) => isUsdKrwYahooSymbol(s))) {
-    console.log("[price/route] 응답 payload 요약", {
-      symbols,
-      keys: Object.keys(prices),
-      values: prices,
-    });
-  }
+    const settled = await Promise.allSettled(
+      symbols.map(async (symbol) => {
+        try {
+          const price = await fetchOnePrice(symbol, session);
+          const body = { symbol, price: price ?? null } as const;
+          const logDetail =
+            isUsdKrwYahooSymbol(symbol) || symbols.length <= 5;
+          if (logDetail) {
+            console.log("[price/route] GET 결과", {
+              symbol,
+              price: body.price,
+              usedFallback: body.price == null,
+              note: body.price == null
+                ? "모든 소스가 null — 클라이언트는 마지막 저장값 사용"
+                : "ok",
+            });
+          }
+          return body;
+        } catch (err) {
+          console.error("[price/route] ✗ fetchOnePrice 예외 | symbol:", symbol, err);
+          return { symbol, price: null };
+        }
+      })
+    );
 
-  return Response.json(prices, {
-    headers: { "Cache-Control": "no-store" },
-  });
+    const prices: Record<string, number | null> = {};
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        prices[r.value.symbol] = r.value.price;
+      }
+    }
+
+    if (symbols.length <= 5 || symbols.some((s) => isUsdKrwYahooSymbol(s))) {
+      console.log("[price/route] 응답 payload 요약", {
+        symbols,
+        keys: Object.keys(prices),
+        values: prices,
+      });
+    }
+
+    return Response.json(
+      { ok: true as const, prices },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (IS_DEV) {
+      console.error("[price/route] GET 예외", {
+        requestUrl,
+        error: msg.slice(0, 300),
+        stack: e instanceof Error ? e.stack : undefined,
+      });
+    } else {
+      console.error("[price/route] GET 예외", msg.slice(0, 200));
+    }
+    return Response.json(
+      { ok: false as const, error: msg || "서버 오류" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
 }

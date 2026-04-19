@@ -8,6 +8,12 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import {
+  FX_CACHE_MARKET,
+  FX_CACHE_SYMBOL,
+  FX_KEY,
+  upsertMarketRow,
+} from "@/lib/marketDataDb";
 import { MOCK_PRICES } from "@/lib/mockPrices";
 import type { AssetSnapshotHolding } from "@/types/assets";
 
@@ -27,17 +33,82 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 내부 /api/price 호출로 USD/KRW 조회, 실패 시 MOCK_PRICES.USDKRW */
-export async function fetchUsdKrwForSnapshot(baseUrl: string): Promise<number> {
+/**
+ * 스냅샷용 환율: `market_data_cache` 최신값 우선, 없으면 /api/price 로 조회 후 DB에 반영.
+ */
+export async function fetchUsdKrwForSnapshot(
+  supabase: SupabaseClient,
+  baseUrl: string
+): Promise<number> {
+  const { data: row, error: selErr } = await supabase
+    .from("market_data_cache")
+    .select("value_numeric")
+    .eq("category", "fx")
+    .eq("key", FX_KEY)
+    .maybeSingle();
+
+  if (!selErr) {
+    const cached = row?.value_numeric;
+    const n =
+      typeof cached === "number"
+        ? cached
+        : typeof cached === "string" && cached.trim()
+          ? Number(cached)
+          : NaN;
+    if (!Number.isNaN(n) && n > 100) {
+      return n;
+    }
+  }
+
   const trimmed = baseUrl.replace(/\/$/, "");
   const url = `${trimmed}/api/price?symbols=${encodeURIComponent(USDKRW_SYMBOL)}`;
   try {
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as Record<string, unknown>;
+    const text = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = text.trim() ? (JSON.parse(text) as unknown) : null;
+    } catch {
+      throw new Error(`USDKRW 응답 JSON 파싱 실패 (앞 120자): ${text.slice(0, 120)}`);
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("ok" in parsed)
+    ) {
+      throw new Error("USDKRW 응답 형식 오류 (ok 필드 없음)");
+    }
+    const envelope = parsed as {
+      ok?: boolean;
+      prices?: Record<string, unknown>;
+      error?: string;
+    };
+    if (envelope.ok === false) {
+      throw new Error(envelope.error ?? "USDKRW API ok:false");
+    }
+    const data = envelope.prices;
+    if (!data || typeof data !== "object") {
+      throw new Error("USDKRW 응답에 prices 없음");
+    }
     const raw = data[USDKRW_SYMBOL];
     const r = typeof raw === "number" ? raw : parseFloat(String(raw ?? ""));
-    if (Number.isFinite(r) && r > 100) return r;
+    if (Number.isFinite(r) && r > 100) {
+      await upsertMarketRow(supabase, {
+        key: FX_KEY,
+        category: "fx",
+        market: FX_CACHE_MARKET,
+        symbol: FX_CACHE_SYMBOL,
+        value_numeric: r,
+        value_text: null,
+        currency: "KRW",
+        source: "snapshot_cron",
+        status: "live",
+        updated_at: new Date().toISOString(),
+      });
+      return r;
+    }
   } catch (e) {
     console.warn("[snapshotAutoSave] USDKRW 조회 실패, MOCK 폴백:", e);
   }
