@@ -12,6 +12,7 @@
  *     (옵션: 컬럼이 없는 구 DB만 NEXT_PUBLIC_INCLUDE_SNAPSHOT_TARGET_WEIGHT_COLUMNS=false)
  */
 
+import { deleteDuplicateCashHoldings, hasCashDuplicateRows } from "./cashHoldingsDedupe";
 import { netInvestmentKrwFromCashflowsUpTo, profitAndReturnRateFromTotalAndNet } from "./netInvestment";
 import { supabase } from "./supabaseClient";
 import type { Cashflow, AssetSnapshot, AssetSnapshotHolding } from "@/types/assets";
@@ -276,36 +277,60 @@ export async function addSnapshot(item: AssetSnapshot): Promise<AssetSnapshot> {
 // Snapshot Holdings  →  asset_snapshot_holdings 테이블
 // ─────────────────────────────────────────────────────────────
 
+async function fetchSnapshotHoldingsFromDb(): Promise<AssetSnapshotHolding[]> {
+  const { data, error } = await supabase
+    .from("asset_snapshot_holdings")
+    .select("*")
+    .order("snapshot_date", { ascending: false });
+
+  if (error) {
+    console.error("[storage] getSnapshotHoldings 오류:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((r) => ({
+    id:               String(r.id ?? ""),
+    snapshot_date:    String(r.snapshot_date ?? ""),
+    name:             String(r.name ?? ""),
+    symbol:           r.symbol ?? undefined,
+    market:           r.market ?? undefined,
+    currency:         r.currency ?? undefined,
+    account:          r.account ?? undefined,
+    quantity:         toNum(r.quantity),
+    avg_price:        toNum(r.avg_price),
+    current_price:    toNum(r.current_price),
+    evaluated_amount: toNum(r.evaluated_amount),
+    weight:               toNumOrUndef(r.weight),
+    target_min_weight:    toNumOrUndef(r.target_min_weight),
+    target_max_weight:    toNumOrUndef(r.target_max_weight),
+    asset_type:           r.asset_type ?? undefined,
+    created_at:           String(r.created_at ?? ""),
+  }));
+}
+
+/**
+ * 예수금 행이 (기준일·유형·계좌) 기준으로 DB에 중복되면 합계가 배로 잡힙니다.
+ * 조회 시 중복을 감지해 1건만 남기고 제거한 뒤 다시 읽습니다.
+ */
 export async function getSnapshotHoldings(): Promise<AssetSnapshotHolding[]> {
   try {
-    const { data, error } = await supabase
-      .from("asset_snapshot_holdings")
-      .select("*")
-      .order("snapshot_date", { ascending: false });
+    const rows = await fetchSnapshotHoldingsFromDb();
+    if (!hasCashDuplicateRows(rows)) return rows;
 
-    if (error) {
-      console.error("[storage] getSnapshotHoldings 오류:", error.message);
-      return [];
+    const removed = await deleteDuplicateCashHoldings(rows);
+    if (removed === 0) {
+      console.error(
+        "[storage] 예수금 중복 행이 감지되었으나 삭제되지 않았습니다. 권한·RLS를 확인하세요."
+      );
+      return rows;
     }
+    console.debug("[storage] 예수금 중복 행 제거:", removed, "건");
 
-    return (data ?? []).map((r) => ({
-      id:               String(r.id ?? ""),
-      snapshot_date:    String(r.snapshot_date ?? ""),
-      name:             String(r.name ?? ""),
-      symbol:           r.symbol ?? undefined,
-      market:           r.market ?? undefined,
-      currency:         r.currency ?? undefined,
-      account:          r.account ?? undefined,
-      quantity:         toNum(r.quantity),
-      avg_price:        toNum(r.avg_price),
-      current_price:    toNum(r.current_price),
-      evaluated_amount: toNum(r.evaluated_amount),
-      weight:               toNumOrUndef(r.weight),
-      target_min_weight:    toNumOrUndef(r.target_min_weight),
-      target_max_weight:    toNumOrUndef(r.target_max_weight),
-      asset_type:           r.asset_type ?? undefined,
-      created_at:           String(r.created_at ?? ""),
-    }));
+    const after = await fetchSnapshotHoldingsFromDb();
+    if (hasCashDuplicateRows(after)) {
+      console.error("[storage] 예수금 중복 행이 일부만 제거된 것 같습니다.");
+    }
+    return after;
   } catch (e) {
     console.error("[storage] getSnapshotHoldings 예외:", e);
     return [];
