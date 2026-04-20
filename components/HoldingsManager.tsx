@@ -235,36 +235,39 @@ function CashEditModal({
   useEffect(() => {
     if (!open || !assetType) return;
 
-    // ── 디버그: 모달 열릴 때 KRW_CASH / USD_CASH row 상태 출력 ──
-    console.group(`[CashEditModal] 초기화 — assetType: ${assetType}`);
-    console.log("snapshot_date:", snapshotDate);
-    console.log("existingRows (raw):", existingRows);
-    console.log(
-      "existingRows 요약:",
-      existingRows.map((r) => ({
-        id:               r.id,
-        account:          r.account,
-        asset_type:       r.asset_type,
-        evaluated_amount: r.evaluated_amount,
-        currency:         r.currency,
-        snapshot_date:    r.snapshot_date,
-      }))
-    );
-
     const init: AccountBalances = { SAMSUNG: "", MERITZ: "", KIWOOM: "", WIFE_KIWOOM: "" };
+    const byAccount = new Map<string, AssetSnapshotHolding[]>();
     existingRows.forEach((r) => {
-      const isKnownAccount = ACCOUNTS.includes(r.account as Account);
-      console.log(
-        `  row: account="${r.account}" (known=${isKnownAccount}), evaluated_amount=${r.evaluated_amount}`
-      );
-      if (isKnownAccount) {
-        init[r.account as Account] =
-          r.evaluated_amount > 0 ? String(r.evaluated_amount) : "";
-      }
+      const acc = r.account ?? "";
+      if (!byAccount.has(acc)) byAccount.set(acc, []);
+      byAccount.get(acc)!.push(r);
     });
+    const perAccountMax = new Map<Account, number>();
+    for (const r of existingRows) {
+      if (!ACCOUNTS.includes(r.account as Account)) continue;
+      const acc = r.account as Account;
+      perAccountMax.set(acc, Math.max(perAccountMax.get(acc) ?? 0, r.evaluated_amount));
+    }
+    for (const acc of ACCOUNTS) {
+      const v = perAccountMax.get(acc) ?? 0;
+      init[acc] = v > 0 ? String(v) : "";
+    }
 
-    console.log("최종 init balances:", init);
-    console.groupEnd();
+    if (process.env.NODE_ENV === "development") {
+      console.debug("[CashEditModal] 초기화", {
+        assetType,
+        snapshotDate,
+        duplicateAccounts: [...byAccount.entries()]
+          .filter(([, list]) => list.length > 1)
+          .map(([acc]) => acc),
+        rows: existingRows.map((r) => ({
+          id: r.id,
+          account: r.account,
+          evaluated_amount: r.evaluated_amount,
+        })),
+        initBalances: init,
+      });
+    }
 
     setBalances(init);
     setError(null);
@@ -282,16 +285,38 @@ function CashEditModal({
   async function handleSave() {
     setSaving(true);
     setError(null);
+    const payload = ACCOUNTS.map((account) => ({
+      account,
+      amount: parseFloat(balances[account].replace(/,/g, "")) || 0,
+    }));
+    if (process.env.NODE_ENV === "development") {
+      console.debug("[CashEditModal] 저장 직전 payload", {
+        assetType,
+        snapshotDate,
+        payload,
+        existingRowIds: existingRows.map((r) => r.id),
+      });
+    }
     try {
       for (const account of ACCOUNTS) {
-        const amount   = parseFloat(balances[account].replace(/,/g, "")) || 0;
-        const existing = existingRows.find((r) => r.account === account);
-        if (existing) {
-          await updateHolding(existing.id, {
+        const amount = parseFloat(balances[account].replace(/,/g, "")) || 0;
+        const matches = existingRows
+          .filter((r) => r.account === account)
+          .sort(
+            (a, b) =>
+              b.evaluated_amount - a.evaluated_amount ||
+              String(b.id).localeCompare(String(a.id))
+          );
+        if (matches.length > 0) {
+          const [keep, ...dupes] = matches;
+          await updateHolding(keep.id, {
             evaluated_amount: amount,
             avg_price:        amount,
             current_price:    amount,
           });
+          for (const d of dupes) {
+            await deleteHolding(d.id);
+          }
         } else {
           await insertHolding({
             snapshot_date:    snapshotDate,
@@ -1483,7 +1508,20 @@ export default function HoldingsManager() {
           setSymbolRefreshedAt(m);
         }
       }
-      setHoldings(mergeQuotesIntoHoldings(rowsForDate, bundle?.quotes ?? {}));
+      const merged = mergeQuotesIntoHoldings(rowsForDate, bundle?.quotes ?? {});
+      if (process.env.NODE_ENV === "development") {
+        const cash = merged.filter((h) => CASH_TYPES.has(h.asset_type ?? ""));
+        console.debug("[HoldingsManager] load 후 불러온 예수금", {
+          snapshotDate: latestDate,
+          rows: cash.map((r) => ({
+            id: r.id,
+            account: r.account,
+            asset_type: r.asset_type,
+            evaluated_amount: r.evaluated_amount,
+          })),
+        });
+      }
+      setHoldings(merged);
     } catch (e) {
       setError(e instanceof Error ? e.message : "데이터 로딩 실패");
     } finally {
@@ -1631,6 +1669,24 @@ export default function HoldingsManager() {
       });
     return map;
   }, [holdings]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    if (holdings.length === 0) return;
+    for (const [assetType, rows] of cashGroups) {
+      const sum = rows.reduce((s, r) => s + r.evaluated_amount, 0);
+      console.debug("[HoldingsCash] 테이블 집계 (렌더 기준)", {
+        assetType,
+        rowCount: rows.length,
+        perRow: rows.map((r) => ({
+          id: r.id,
+          account: r.account,
+          evaluated_amount: r.evaluated_amount,
+        })),
+        sumEvaluatedAmount: sum,
+      });
+    }
+  }, [holdings, cashGroups]);
 
   /** 대시보드·자산비율 차트와 동일: 전체 자산 = 원화 합 + (달러 합 × 환율) */
   const totalAssetsKRW = useMemo(() => {
@@ -2204,21 +2260,18 @@ export default function HoldingsManager() {
                               <button
                                 onClick={() => {
                                   const cashType = assetType as CashAssetType;
-                                  const rows = cashGroups.get(cashType) ?? [];
-                                  console.group(`[HoldingsManager] ${cashType} 수정 버튼 클릭`);
-                                  console.log("cashGroups keys:", [...cashGroups.keys()]);
-                                  console.log(`cashGroups.get("${cashType}"):`, rows);
-                                  console.log(
-                                    "rows 요약:",
-                                    rows.map((r) => ({
-                                      id: r.id,
-                                      account: r.account,
-                                      asset_type: r.asset_type,
-                                      evaluated_amount: r.evaluated_amount,
-                                      snapshot_date: r.snapshot_date,
-                                    }))
-                                  );
-                                  console.groupEnd();
+                                  if (process.env.NODE_ENV === "development") {
+                                    const r = cashGroups.get(cashType) ?? [];
+                                    console.debug("[HoldingsCash] 예수금 수정 클릭", {
+                                      cashType,
+                                      rowCount: r.length,
+                                      rows: r.map((x) => ({
+                                        id: x.id,
+                                        account: x.account,
+                                        evaluated_amount: x.evaluated_amount,
+                                      })),
+                                    });
+                                  }
                                   setCashModalType(cashType);
                                 }}
                                 className="p-1.5 rounded-lg text-gray-400 hover:text-amber-500 hover:bg-amber-50 transition-colors"
