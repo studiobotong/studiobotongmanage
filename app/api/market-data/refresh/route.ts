@@ -543,14 +543,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (applyHoldings && Object.keys(priceMap).length > 0) {
-        const { updatedRows } = await applyStockPricesToLatestHoldings(
+        const { updatedRows, updatedHoldingRows } = await applyStockPricesToLatestHoldings(
           supabase,
           priceMap
         );
-        steps.applyHoldings = `updated:${updatedRows}`;
+        steps.applyHoldings = `updated:${updatedRows} holdings:${updatedHoldingRows}`;
         if (IS_DEV) {
           console.log("[market-data/refresh] applyStockPricesToLatestHoldings", {
             updatedRows,
+            updatedHoldingRows,
           });
         }
       }

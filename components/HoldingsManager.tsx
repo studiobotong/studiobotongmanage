@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import {
-  getSnapshotHoldings,
+  getHoldings,
   insertHolding,
   updateHolding,
   deleteHolding,
@@ -37,7 +37,7 @@ import {
   formatTargetRange,
   hasValidTargetBand,
 } from "@/lib/targetWeightBand";
-import type { AssetSnapshotHolding } from "@/types/assets";
+import type { Holding } from "@/types/assets";
 
 // ─────────────────────────────────────────────────────────────
 // 상수
@@ -89,7 +89,7 @@ const CASH_TYPES = new Set<string>(["KRW_CASH", "USD_CASH"]);
 // 계좌명 리스트 포맷 (최대 2개 표시, 초과 시 "외 N개")
 // ─────────────────────────────────────────────────────────────
 
-function formatAccountList(rows: AssetSnapshotHolding[]): { short: string; full: string } {
+function formatAccountList(rows: Holding[]): { short: string; full: string } {
   const labels = rows
     .filter((r) => r.quantity > 0 && ACCOUNTS.includes(r.account as Account))
     .map((r) => ACCOUNT_LABELS[r.account as Account]);
@@ -132,9 +132,6 @@ type NonCashAssetType = (typeof NON_CASH_ASSET_TYPES)[number];
 // 유틸
 // ─────────────────────────────────────────────────────────────
 
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function safeNum(v: string): number {
   const n = parseFloat(v.replace(/,/g, ""));
@@ -170,21 +167,18 @@ const MARKET_BADGE: Record<string, string> = {
 // 예수금 자동 생성 — 4계좌 × 2유형 = 최대 8행
 // ─────────────────────────────────────────────────────────────
 
-async function ensureCashHoldings(
-  holdings: AssetSnapshotHolding[],
-  snapshotDate: string
-): Promise<boolean> {
+async function ensureCashHoldings(holdings: Holding[]): Promise<boolean> {
+  // holdings 테이블은 snapshot_date가 없으므로 (account, asset_type) 키만 사용
   const existingKeys = new Set(
-    holdings.map((h) => `${h.account}|${h.asset_type}|${h.snapshot_date}`)
+    holdings.map((h) => `${h.account}|${h.asset_type}`)
   );
 
   let inserted = false;
   for (const [assetType, meta] of Object.entries(CASH_META)) {
     for (const account of ACCOUNTS) {
-      const key = `${account}|${assetType}|${snapshotDate}`;
+      const key = `${account}|${assetType}`;
       if (!existingKeys.has(key)) {
         await insertHolding({
-          snapshot_date:    snapshotDate,
           name:             meta.name,
           symbol:           meta.symbol,
           market:           "CASH",
@@ -212,8 +206,7 @@ type AccountBalances = Record<Account, string>;
 interface CashEditModalProps {
   open:         boolean;
   assetType:    CashAssetType | null;
-  existingRows: AssetSnapshotHolding[];
-  snapshotDate: string;
+  existingRows: Holding[];
   onClose:      () => void;
   onSaved:      () => void;
 }
@@ -222,7 +215,6 @@ function CashEditModal({
   open,
   assetType,
   existingRows,
-  snapshotDate,
   onClose,
   onSaved,
 }: CashEditModalProps) {
@@ -236,7 +228,7 @@ function CashEditModal({
     if (!open || !assetType) return;
 
     const init: AccountBalances = { SAMSUNG: "", MERITZ: "", KIWOOM: "", WIFE_KIWOOM: "" };
-    const byAccount = new Map<string, AssetSnapshotHolding[]>();
+    const byAccount = new Map<string, Holding[]>();
     existingRows.forEach((r) => {
       const acc = r.account ?? "";
       if (!byAccount.has(acc)) byAccount.set(acc, []);
@@ -256,7 +248,6 @@ function CashEditModal({
     if (process.env.NODE_ENV === "development") {
       console.debug("[CashEditModal] 초기화", {
         assetType,
-        snapshotDate,
         duplicateAccounts: [...byAccount.entries()]
           .filter(([, list]) => list.length > 1)
           .map(([acc]) => acc),
@@ -271,7 +262,7 @@ function CashEditModal({
 
     setBalances(init);
     setError(null);
-  }, [open, assetType, existingRows, snapshotDate]);
+  }, [open, assetType, existingRows]);
 
   if (!open || !assetType) return null;
 
@@ -292,7 +283,6 @@ function CashEditModal({
     if (process.env.NODE_ENV === "development") {
       console.debug("[CashEditModal] 저장 직전 payload", {
         assetType,
-        snapshotDate,
         payload,
         existingRowIds: existingRows.map((r) => r.id),
       });
@@ -319,7 +309,6 @@ function CashEditModal({
           }
         } else {
           await insertHolding({
-            snapshot_date:    snapshotDate,
             name:             meta.name,
             symbol:           meta.symbol,
             market:           "CASH",
@@ -437,8 +426,7 @@ interface BondDraft {
 interface BondEditModalProps {
   open:         boolean;
   currency:     "KRW" | "USD" | null;
-  existingRows: AssetSnapshotHolding[];
-  snapshotDate: string;
+  existingRows: Holding[];
   onClose:      () => void;
   onSaved:      () => void;
 }
@@ -447,7 +435,6 @@ function BondEditModal({
   open,
   currency,
   existingRows,
-  snapshotDate,
   onClose,
   onSaved,
 }: BondEditModalProps) {
@@ -532,7 +519,7 @@ function BondEditModal({
         if (d.id && existingIds.has(d.id)) {
           await updateHolding(d.id, payload);
         } else {
-          await insertHolding({ snapshot_date: snapshotDate, ...payload });
+          await insertHolding(payload);
         }
       }
 
@@ -718,14 +705,12 @@ function emptyAccountEntries(): AccountEntries {
 // ─────────────────────────────────────────────────────────────
 
 interface AddHoldingModalProps {
-  open:         boolean;
-  snapshotDate: string;
-  onClose:      () => void;
-  onSaved:      () => void;
+  open:    boolean;
+  onClose: () => void;
+  onSaved: () => void;
 }
 
-function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingModalProps) {
-  const [date, setDate]           = useState(snapshotDate);
+function AddHoldingModal({ open, onClose, onSaved }: AddHoldingModalProps) {
   const [name, setName]           = useState("");
   const [symbol, setSymbol]       = useState("");
   const [market, setMarket]       = useState<Market>("KRX");
@@ -735,13 +720,12 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
   const [manualPriceEnabled, setManualPriceEnabled] = useState(false);
   const [manualPrice, setManualPrice]               = useState("");
   const [targetMinStr, setTargetMinStr]             = useState("");
-  const [targetMaxStr, setTargetMaxStr]           = useState("");
+  const [targetMaxStr, setTargetMaxStr]             = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setDate(snapshotDate);
       setName("");
       setSymbol("");
       setMarket("KRX");
@@ -754,7 +738,7 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
       setTargetMaxStr("");
       setError(null);
     }
-  }, [open, snapshotDate]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -768,7 +752,6 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
   }, 0);
 
   async function handleSave() {
-    if (!date)         { setError("기준일을 입력해주세요."); return; }
     if (!name.trim())  { setError("종목명을 입력해주세요."); return; }
     if (!symbol.trim()) { setError("티커를 입력해주세요."); return; }
 
@@ -825,7 +808,6 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
         // 조회 실패 시 avg_price로 대체하지 않음 — 실제 시세가 없으면 0으로 저장
         const cur = currentPrice > 0 ? currentPrice : 0;
         await insertHolding({
-          snapshot_date:    date,
           name:             name.trim(),
           symbol:           symbol.trim(),
           market,
@@ -877,16 +859,6 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
             <p className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">
               종목 공통 정보
             </p>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5">기준일</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#5b6af4]/30 focus:border-[#5b6af4]"
-              />
-            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1109,17 +1081,15 @@ function AddHoldingModal({ open, snapshotDate, onClose, onSaved }: AddHoldingMod
 // ─────────────────────────────────────────────────────────────
 
 interface EditGroupedHoldingModalProps {
-  open:         boolean;
-  group:        GroupedHolding | null;
-  snapshotDate: string;
-  onClose:      () => void;
-  onSaved:      () => void;
+  open:    boolean;
+  group:   GroupedHolding<Holding> | null;
+  onClose: () => void;
+  onSaved: () => void;
 }
 
 function EditGroupedHoldingModal({
   open,
   group,
-  snapshotDate,
   onClose,
   onSaved,
 }: EditGroupedHoldingModalProps) {
@@ -1235,7 +1205,6 @@ function EditGroupedHoldingModal({
             });
           } else {
             const inserted = await insertHolding({
-              snapshot_date:    snapshotDate,
               name:             group!.name,
               symbol:           group!.symbol,
               market:           group!.market,
@@ -1265,10 +1234,9 @@ function EditGroupedHoldingModal({
         update대상_row_개수: updateOrInsertRowCount,
       });
 
-      const fresh = await getSnapshotHoldings();
+      const fresh = await getHoldings();
       const sameGroup = fresh.filter(
         (h) =>
-          h.snapshot_date === snapshotDate &&
           (h.symbol ?? "") === (group!.symbol ?? "") &&
           (h.market ?? "") === (group!.market ?? "") &&
           (h.currency ?? "") === (group!.currency ?? "") &&
@@ -1439,12 +1407,12 @@ function evalAmountToKrw(evaluatedAmount: number, currency: string | undefined, 
 }
 
 export default function HoldingsManager() {
-  const [holdings, setHoldings]           = useState<AssetSnapshotHolding[]>([]);
+  const [holdings, setHoldings]           = useState<Holding[]>([]);
   const [loading, setLoading]             = useState(true);
   const [error, setError]                 = useState<string | null>(null);
   const [addModalOpen, setAddModalOpen]   = useState(false);
-  const [editGroup, setEditGroup]         = useState<GroupedHolding | null>(null);
-  const [deleteGroup, setDeleteGroup]     = useState<GroupedHolding | null>(null);
+  const [editGroup, setEditGroup]         = useState<GroupedHolding<Holding> | null>(null);
+  const [deleteGroup, setDeleteGroup]     = useState<GroupedHolding<Holding> | null>(null);
   const [deleting, setDeleting]           = useState(false);
   const [cashModalType, setCashModalType]         = useState<CashAssetType | null>(null);
   const [bondModalCurrency, setBondModalCurrency] = useState<"KRW" | "USD" | null>(null);
@@ -1465,32 +1433,20 @@ export default function HoldingsManager() {
     setSymbolRefreshedAt(m);
   };
 
-  const snapshotDate = holdings.length > 0 ? holdings[0].snapshot_date : todayStr();
-
   // ── 조회 + 예수금 자동 생성 ──────────────────────────────────
+  // holdings 테이블은 snapshot_date가 없으므로 날짜 필터링 없이 전체 조회
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const all = await getSnapshotHoldings();
+      const rows = await getHoldings();
 
-      let latestDate = todayStr();
-      if (all.length > 0) {
-        latestDate = [...all].sort((a, b) =>
-          b.snapshot_date.localeCompare(a.snapshot_date)
-        )[0].snapshot_date;
-      }
-
-      const latest = all.filter((h) => h.snapshot_date === latestDate);
-      const inserted = await ensureCashHoldings(latest, latestDate);
-
-      let rowsForDate: typeof latest;
+      // 예수금 행이 없는 경우 자동 생성 (4계좌 × 2유형)
+      const inserted = await ensureCashHoldings(rows);
+      let current = rows;
       if (inserted) {
-        const refreshed = await getSnapshotHoldings();
-        rowsForDate = refreshed.filter((h) => h.snapshot_date === latestDate);
-      } else {
-        rowsForDate = latest;
+        current = await getHoldings();
       }
 
       const bundle = await fetchMarketDataFromApi();
@@ -1508,11 +1464,10 @@ export default function HoldingsManager() {
           setSymbolRefreshedAt(m);
         }
       }
-      const merged = mergeQuotesIntoHoldings(rowsForDate, bundle?.quotes ?? {});
+      const merged = mergeQuotesIntoHoldings(current, bundle?.quotes ?? {});
       if (process.env.NODE_ENV === "development") {
         const cash = merged.filter((h) => CASH_TYPES.has(h.asset_type ?? ""));
         console.debug("[HoldingsManager] load 후 불러온 예수금", {
-          snapshotDate: latestDate,
           rows: cash.map((r) => ({
             id: r.id,
             account: r.account,
@@ -1571,22 +1526,10 @@ export default function HoldingsManager() {
         ...new Set(stockHoldings.filter((h) => h.symbol).map((h) => h.symbol!)),
       ];
 
-      const freshRows = await getSnapshotHoldings();
-      let latestDate = snapshotDate;
-      if (freshRows.length > 0) {
-        latestDate = [...freshRows].sort((a, b) =>
-          b.snapshot_date.localeCompare(a.snapshot_date)
-        )[0].snapshot_date;
-      }
+      const freshRows = await getHoldings();
       const afterPriceBySym = new Map<string, number>();
       for (const h of freshRows) {
-        if (
-          h.snapshot_date !== latestDate ||
-          h.asset_type !== "STOCK" ||
-          !h.symbol
-        ) {
-          continue;
-        }
+        if (h.asset_type !== "STOCK" || !h.symbol) continue;
         const p = Number(h.current_price);
         afterPriceBySym.set(h.symbol, Number.isFinite(p) ? p : 0);
       }
@@ -1645,7 +1588,7 @@ export default function HoldingsManager() {
   // 채권 — 통화별로 그룹핑 (화면엔 1줄, DB엔 개별 row)
   // useMemo로 참조 안정화: BondEditModal의 useEffect가 매 렌더마다 재실행되어 입력값 초기화 방지
   const bondGroups = useMemo(() => {
-    const map = new Map<"KRW" | "USD", AssetSnapshotHolding[]>();
+    const map = new Map<"KRW" | "USD", Holding[]>();
     holdings
       .filter((h) => h.asset_type === "BOND")
       .forEach((h) => {
@@ -1659,7 +1602,7 @@ export default function HoldingsManager() {
   // useMemo로 안정화 — 참조가 바뀌면 CashEditModal의 useEffect가
   // 매 렌더마다 재실행되어 입력값이 초기화되는 문제 방지
   const cashGroups = useMemo(() => {
-    const map = new Map<string, AssetSnapshotHolding[]>();
+    const map = new Map<string, Holding[]>();
     holdings
       .filter((h) => CASH_TYPES.has(h.asset_type ?? ""))
       .forEach((h) => {
@@ -2295,7 +2238,6 @@ export default function HoldingsManager() {
       {/* 종목 추가 모달 */}
       <AddHoldingModal
         open={addModalOpen}
-        snapshotDate={snapshotDate}
         onClose={() => setAddModalOpen(false)}
         onSaved={load}
       />
@@ -2304,7 +2246,6 @@ export default function HoldingsManager() {
       <EditGroupedHoldingModal
         open={editGroup !== null}
         group={editGroup}
-        snapshotDate={snapshotDate}
         onClose={() => setEditGroup(null)}
         onSaved={load}
       />
@@ -2314,7 +2255,6 @@ export default function HoldingsManager() {
         open={cashModalType !== null}
         assetType={cashModalType}
         existingRows={cashModalType ? (cashGroups.get(cashModalType) ?? []) : []}
-        snapshotDate={snapshotDate}
         onClose={() => setCashModalType(null)}
         onSaved={load}
       />
@@ -2324,7 +2264,6 @@ export default function HoldingsManager() {
         open={bondModalCurrency !== null}
         currency={bondModalCurrency}
         existingRows={bondModalCurrency ? (bondGroups.get(bondModalCurrency) ?? []) : []}
-        snapshotDate={snapshotDate}
         onClose={() => setBondModalCurrency(null)}
         onSaved={load}
       />

@@ -7,15 +7,27 @@
  * Tables:
  *   cashflow                 — 입금/출금/배당 기록
  *   asset_snapshots          — 날짜별 자산 요약
- *   asset_snapshot_holdings  — 날짜별 보유 종목 상태 (현재 holdings 원본)
+ *   holdings                 — 현재 보유현황 원본 (snapshot_date 없음) ← HoldingsManager 전용
+ *   asset_snapshot_holdings  — 날짜별 보유 종목 스냅샷 (이력/차트 조회 전용)
  *   asset_snapshot_items     — 일별 자동 스냅샷 상세 (크론 /api/snapshot)
  *     (옵션: 컬럼이 없는 구 DB만 NEXT_PUBLIC_INCLUDE_SNAPSHOT_TARGET_WEIGHT_COLUMNS=false)
+ *
+ * current holdings vs snapshot holdings 역할 분리:
+ *   - getHoldings / insertHolding / updateHolding / deleteHolding
+ *       → holdings 테이블 (현재 상태, 날짜 무관)
+ *   - getSnapshotHoldings / saveSnapshotHoldings / saveHoldingsSnapshot
+ *       → asset_snapshot_holdings 테이블 (이력/기록용)
  */
 
-import { deleteDuplicateCashHoldings, hasCashDuplicateRows } from "./cashHoldingsDedupe";
+import {
+  deleteDuplicateCashHoldings,
+  hasCashDuplicateRows,
+  hasCashDuplicateRowsHolding,
+  deleteDuplicateCashHoldingsFromHoldings,
+} from "./cashHoldingsDedupe";
 import { netInvestmentKrwFromCashflowsUpTo, profitAndReturnRateFromTotalAndNet } from "./netInvestment";
 import { supabase } from "./supabaseClient";
-import type { Cashflow, AssetSnapshot, AssetSnapshotHolding } from "@/types/assets";
+import type { Cashflow, AssetSnapshot, AssetSnapshotHolding, Holding } from "@/types/assets";
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -389,10 +401,16 @@ export async function getLatestSnapshotHoldings(): Promise<AssetSnapshotHolding[
   return all.filter((h) => h.snapshot_date === latestDate);
 }
 
-function mapRowToHolding(data: Record<string, unknown>): AssetSnapshotHolding {
+// ─────────────────────────────────────────────────────────────
+// Current Holdings  →  holdings 테이블 (현재 상태, 날짜 무관)
+//
+// HoldingsManager 가 직접 읽고 쓰는 단일 진실 원본(source of truth).
+// 스냅샷(이력) 저장은 saveHoldingsSnapshot() 참조.
+// ─────────────────────────────────────────────────────────────
+
+function mapRowToHolding(data: Record<string, unknown>): Holding {
   return {
     id:               String(data.id ?? ""),
-    snapshot_date:    String(data.snapshot_date ?? ""),
     name:             String(data.name ?? ""),
     symbol:           data.symbol != null ? String(data.symbol) : undefined,
     market:           data.market != null ? String(data.market) : undefined,
@@ -407,34 +425,79 @@ function mapRowToHolding(data: Record<string, unknown>): AssetSnapshotHolding {
     target_max_weight:   toNumOrUndef(data.target_max_weight),
     asset_type:          data.asset_type != null ? String(data.asset_type) : undefined,
     created_at:          String(data.created_at ?? ""),
+    updated_at:          String(data.updated_at ?? ""),
   };
 }
 
+async function fetchHoldingsFromDb(): Promise<Holding[]> {
+  const { data, error } = await supabase
+    .from("holdings")
+    .select("*")
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("[storage] fetchHoldingsFromDb 오류:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((r) => mapRowToHolding(r as Record<string, unknown>));
+}
+
 /**
- * 새로운 holding 1건을 insert 합니다.
+ * 현재 보유현황 전체를 반환합니다.
+ * 예수금 중복 행이 감지되면 자동으로 정리합니다.
+ */
+export async function getHoldings(): Promise<Holding[]> {
+  try {
+    const rows = await fetchHoldingsFromDb();
+    if (!hasCashDuplicateRowsHolding(rows)) return rows;
+
+    const removed = await deleteDuplicateCashHoldingsFromHoldings(rows);
+    if (removed === 0) {
+      console.error(
+        "[storage] holdings 예수금 중복 행이 감지되었으나 삭제되지 않았습니다. 권한·RLS를 확인하세요."
+      );
+      return rows;
+    }
+    console.debug("[storage] holdings 예수금 중복 행 제거:", removed, "건");
+
+    const after = await fetchHoldingsFromDb();
+    if (hasCashDuplicateRowsHolding(after)) {
+      console.error("[storage] holdings 예수금 중복 행이 일부만 제거된 것 같습니다.");
+    }
+    return after;
+  } catch (e) {
+    console.error("[storage] getHoldings 예외:", e);
+    return [];
+  }
+}
+
+/**
+ * 현재 보유현황에 종목 1건을 추가합니다.
+ * (snapshot_date 없음 — holdings 테이블 전용)
  */
 export async function insertHolding(
-  item: Omit<AssetSnapshotHolding, "id" | "created_at">
-): Promise<AssetSnapshotHolding> {
+  item: Omit<Holding, "id" | "created_at" | "updated_at">
+): Promise<Holding> {
   const row = {
-    snapshot_date:       item.snapshot_date,
-    name:                item.name,
-    symbol:              item.symbol ?? null,
-    market:              item.market ?? null,
-    currency:            item.currency ?? null,
-    account:             item.account ?? null,
-    quantity:            item.quantity,
-    avg_price:           item.avg_price,
-    current_price:       item.current_price,
-    evaluated_amount:    item.evaluated_amount,
-    weight:              item.weight ?? null,
-    ...targetWeightRowSlice(item),
-    asset_type:          item.asset_type ?? null,
-    created_at:          new Date().toISOString(),
+    name:             item.name,
+    symbol:           item.symbol ?? null,
+    market:           item.market ?? null,
+    currency:         item.currency ?? null,
+    account:          item.account ?? null,
+    quantity:         item.quantity,
+    avg_price:        item.avg_price,
+    current_price:    item.current_price,
+    evaluated_amount: item.evaluated_amount,
+    weight:           item.weight ?? null,
+    target_min_weight: item.target_min_weight ?? null,
+    target_max_weight: item.target_max_weight ?? null,
+    asset_type:       item.asset_type ?? null,
+    created_at:       new Date().toISOString(),
   };
 
   const { data, error } = await supabase
-    .from("asset_snapshot_holdings")
+    .from("holdings")
     .insert(row)
     .select()
     .single();
@@ -448,15 +511,14 @@ export async function insertHolding(
 }
 
 /**
- * 기존 holding 1건을 업데이트합니다.
- * @returns 업데이트된 행(.select), 갱신 필드가 없으면 null
+ * 현재 보유현황 종목 1건을 업데이트합니다.
+ * @returns 업데이트된 행, 갱신 필드가 없으면 null
  */
 export async function updateHolding(
   id: string,
-  updates: Partial<Omit<AssetSnapshotHolding, "id" | "created_at">>
-): Promise<AssetSnapshotHolding | null> {
+  updates: Partial<Omit<Holding, "id" | "created_at" | "updated_at">>
+): Promise<Holding | null> {
   const row: Record<string, unknown> = {};
-  if (updates.snapshot_date    !== undefined) row.snapshot_date    = updates.snapshot_date;
   if (updates.name             !== undefined) row.name             = updates.name;
   if (updates.symbol           !== undefined) row.symbol           = updates.symbol ?? null;
   if (updates.market           !== undefined) row.market           = updates.market ?? null;
@@ -467,12 +529,8 @@ export async function updateHolding(
   if (updates.current_price    !== undefined) row.current_price    = updates.current_price;
   if (updates.evaluated_amount !== undefined) row.evaluated_amount = updates.evaluated_amount;
   if (updates.weight              !== undefined) row.weight              = updates.weight ?? null;
-  if (snapshotHoldingIncludesTargetWeightColumns()) {
-    if (updates.target_min_weight !== undefined)
-      row.target_min_weight = updates.target_min_weight ?? null;
-    if (updates.target_max_weight !== undefined)
-      row.target_max_weight = updates.target_max_weight ?? null;
-  }
+  if (updates.target_min_weight   !== undefined) row.target_min_weight   = updates.target_min_weight ?? null;
+  if (updates.target_max_weight   !== undefined) row.target_max_weight   = updates.target_max_weight ?? null;
   if (updates.asset_type          !== undefined) row.asset_type          = updates.asset_type ?? null;
 
   if (Object.keys(row).length === 0) {
@@ -480,7 +538,7 @@ export async function updateHolding(
   }
 
   const { data, error } = await supabase
-    .from("asset_snapshot_holdings")
+    .from("holdings")
     .update(row)
     .eq("id", id)
     .select()
@@ -496,17 +554,76 @@ export async function updateHolding(
 }
 
 /**
- * holding 1건을 삭제합니다.
+ * 현재 보유현황 종목 1건을 삭제합니다.
  */
 export async function deleteHolding(id: string): Promise<void> {
   const { error } = await supabase
-    .from("asset_snapshot_holdings")
+    .from("holdings")
     .delete()
     .eq("id", id);
 
   if (error) {
     console.error("[storage] deleteHolding 오류:", error.message);
     throw new Error(error.message);
+  }
+}
+
+/**
+ * 현재 holdings 상태를 asset_snapshot_holdings 테이블에 날짜별로 복사 저장합니다.
+ *
+ * 흐름:
+ *   1. holdings 전체 조회
+ *   2. 해당 date 의 기존 snapshot 행 삭제 (멱등성 보장)
+ *   3. holdings 행을 snapshot_date = date 로 변환해 삽입
+ *
+ * 호출 시점 예시:
+ *   - 사용자가 "오늘 기준 스냅샷 저장" 버튼을 누를 때
+ *   - 크론(/api/snapshot)이 실행되기 전 훅 등
+ */
+export async function saveHoldingsSnapshot(date: string): Promise<void> {
+  try {
+    const current = await getHoldings();
+    if (current.length === 0) {
+      console.warn("[storage] saveHoldingsSnapshot: holdings 가 비어 있어 스냅샷을 저장하지 않습니다.");
+      return;
+    }
+
+    // 해당 날짜 기존 스냅샷 삭제 (재실행 안전)
+    const { error: delErr } = await supabase
+      .from("asset_snapshot_holdings")
+      .delete()
+      .eq("snapshot_date", date);
+    if (delErr) {
+      console.error("[storage] saveHoldingsSnapshot delete 오류:", delErr.message);
+    }
+
+    // holdings → asset_snapshot_holdings 변환 삽입
+    const rows = current.map((h) => ({
+      snapshot_date:    date,
+      name:             h.name,
+      symbol:           h.symbol ?? null,
+      market:           h.market ?? null,
+      currency:         h.currency ?? null,
+      account:          h.account ?? null,
+      quantity:         h.quantity,
+      avg_price:        h.avg_price,
+      current_price:    h.current_price,
+      evaluated_amount: h.evaluated_amount,
+      weight:           h.weight ?? null,
+      target_min_weight: h.target_min_weight ?? null,
+      target_max_weight: h.target_max_weight ?? null,
+      asset_type:       h.asset_type ?? null,
+      created_at:       new Date().toISOString(),
+    }));
+
+    const { error } = await supabase.from("asset_snapshot_holdings").insert(rows);
+    if (error) {
+      console.error("[storage] saveHoldingsSnapshot insert 오류:", error.message);
+      throw new Error(error.message);
+    }
+  } catch (e) {
+    console.error("[storage] saveHoldingsSnapshot 예외:", e);
+    throw e;
   }
 }
 
@@ -519,6 +636,7 @@ export async function clearAllData(): Promise<void> {
     await Promise.all([
       supabase.from("cashflow").delete().not("id", "is", null),
       supabase.from("asset_snapshots").delete().not("id", "is", null),
+      supabase.from("holdings").delete().not("id", "is", null),
       supabase.from("asset_snapshot_holdings").delete().not("id", "is", null),
       supabase.from("asset_snapshot_items").delete().not("id", "is", null),
     ]);

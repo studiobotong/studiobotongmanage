@@ -1,6 +1,13 @@
 /**
  * Vercel Cron (vercel.json): `0 0 * * *` runs this route at 00:00 UTC daily,
  * which is 09:00 KST (Asia/Seoul) the same calendar day.
+ *
+ * 스냅샷 생성 흐름:
+ *   1. getHoldings() — holdings 테이블(현재 source of truth)에서 보유현황 조회
+ *   2. 현재가(market_data_cache) 적용 → holdingsForCalc
+ *   3. asset_snapshot_holdings 해당 날짜 삭제 → holdingsForCalc 기준 재저장
+ *   4. asset_snapshot_items 해당 날짜 삭제 → holdingsForCalc 기준 재생성
+ *   5. asset_snapshots 요약 계산 및 저장 (asset_snapshot_holdings 재조회 없음)
  */
 import { NextResponse } from "next/server";
 
@@ -9,15 +16,15 @@ import { mergeQuotesIntoHoldings } from "@/lib/mergeQuotesIntoHoldings";
 import { fetchMarketDataBundleFromDb } from "@/lib/marketDataDb";
 import {
   computeSnapshotSummary,
-  fetchLatestHoldings,
   fetchUsdKrwForSnapshot,
   holdingsToSnapshotItems,
   originFromRequest,
   snapshotDateSeoul,
   type SnapshotItemRow,
 } from "@/lib/snapshotAutoSave";
-import { getCashflows } from "@/lib/storage";
+import { getCashflows, getHoldings } from "@/lib/storage";
 import { supabase } from "@/lib/supabaseClient";
+import type { AssetSnapshotHolding, Holding } from "@/types/assets";
 
 export const dynamic = "force-dynamic";
 
@@ -39,12 +46,78 @@ function missingEnvResponse() {
 
 function snapshotApiLog(payload: {
   snapshot_date: string;
-  holdings_source_snapshot_date: string | null;
+  holdings_count: number;
   repair: boolean;
   deleted_item_count: number;
   inserted_item_count: number;
+  deleted_snapshot_holding_count: number;
+  inserted_snapshot_holding_count: number;
 }) {
   console.log("[snapshot API]", payload);
+}
+
+/**
+ * Holding[] → AssetSnapshotHolding[]: snapshot_date 를 추가하고 updated_at 는 제거합니다.
+ */
+function holdingsToSnapshotHoldings(
+  holdings: Holding[],
+  snapshotDate: string
+): AssetSnapshotHolding[] {
+  return holdings.map(({ updated_at: _u, ...h }) => ({
+    ...h,
+    snapshot_date: snapshotDate,
+  }));
+}
+
+/**
+ * asset_snapshot_holdings 해당 날짜 삭제 → holdingsForCalc 기준 재저장.
+ * 요약·items 계산에는 이 함수 반환값이 아닌 holdingsForCalc 를 직접 사용합니다.
+ */
+async function saveSnapshotHoldingsForDate(
+  holdings: AssetSnapshotHolding[],
+  snapshotDate: string
+): Promise<{ deletedCount: number; insertedCount: number }> {
+  const { data: deleted, error: delErr } = await supabase
+    .from("asset_snapshot_holdings")
+    .delete()
+    .eq("snapshot_date", snapshotDate)
+    .select("id");
+  if (delErr) {
+    console.error("[snapshot] asset_snapshot_holdings 삭제 오류:", delErr.message);
+  }
+  const deletedCount = deleted?.length ?? 0;
+
+  if (holdings.length === 0) {
+    return { deletedCount, insertedCount: 0 };
+  }
+
+  const rows = holdings.map((h) => ({
+    snapshot_date:     snapshotDate,
+    name:              h.name,
+    symbol:            h.symbol ?? null,
+    market:            h.market ?? null,
+    currency:          h.currency ?? null,
+    account:           h.account ?? null,
+    quantity:          h.quantity,
+    avg_price:         h.avg_price,
+    current_price:     h.current_price,
+    evaluated_amount:  h.evaluated_amount,
+    weight:            h.weight ?? null,
+    target_min_weight: h.target_min_weight ?? null,
+    target_max_weight: h.target_max_weight ?? null,
+    asset_type:        h.asset_type ?? null,
+    created_at:        new Date().toISOString(),
+  }));
+
+  const { data: inserted, error: insErr } = await supabase
+    .from("asset_snapshot_holdings")
+    .insert(rows)
+    .select("id");
+  if (insErr) {
+    console.error("[snapshot] asset_snapshot_holdings 삽입 오류:", insErr.message);
+  }
+
+  return { deletedCount, insertedCount: inserted?.length ?? 0 };
 }
 
 async function deleteAndInsertSnapshotItems(
@@ -94,8 +167,7 @@ async function deleteAndInsertSnapshotItems(
 /**
  * 하루 1회: 요약 1행 + 상세 N행 (같은 snapshot_date).
  * - 일반: 요약이 이미 있으면 스킵(중복 요약 방지).
- * - repair=1: 오늘 상세만 삭제 후 최신 holdings로 재삽입; 요약은 유지(옵션 recalc_summary=1 로 재계산).
- * - 저장 순서: 해당 일자 상세 삭제 → 상세 insert → 요약 insert (요약 실패 시 재시도 가능).
+ * - repair=1: 상세 삭제 후 holdings 기준으로 재삽입; 요약은 유지(옵션 recalc_summary=1 로 재계산).
  */
 export async function GET(request: Request) {
   if (IS_DEV) {
@@ -138,10 +210,12 @@ export async function GET(request: Request) {
     if (!repair && existing != null) {
       snapshotApiLog({
         snapshot_date: snapshotDate,
-        holdings_source_snapshot_date: null,
+        holdings_count: 0,
         repair: false,
         deleted_item_count: 0,
         inserted_item_count: 0,
+        deleted_snapshot_holding_count: 0,
+        inserted_snapshot_holding_count: 0,
       });
       return NextResponse.json({
         ok: true as const,
@@ -152,16 +226,56 @@ export async function GET(request: Request) {
       });
     }
 
-    if (repair) {
-      const usdkrw_rate = await fetchUsdKrwForSnapshot(supabase, baseUrl);
-      const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
-      const quoteBundle = await fetchMarketDataBundleFromDb(supabase);
-      const holdingsForCalc = mergeQuotesIntoHoldings(holdings, quoteBundle.quotes);
-      const summary = computeSnapshotSummary(holdingsForCalc, usdkrw_rate);
-      const cashflows = await getCashflows();
-      const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
-      const itemRows = holdingsToSnapshotItems(snapshotDate, holdingsForCalc);
+    // ── 1. holdings 테이블에서 현재 보유현황 조회 ────────────────────────
+    const usdkrw_rate = await fetchUsdKrwForSnapshot(supabase, baseUrl);
+    const currentHoldings = await getHoldings();
 
+    if (currentHoldings.length === 0) {
+      console.warn("[snapshot] holdings 테이블이 비어 있어 스냅샷을 생성할 수 없습니다.");
+      return NextResponse.json(
+        {
+          ok: false as const,
+          inserted: false,
+          mode: repair ? ("repair" as const) : ("normal" as const),
+          reason: "empty_holdings",
+          error: "holdings 테이블이 비어 있어 스냅샷을 생성할 수 없습니다.",
+          snapshot_date: snapshotDate,
+        },
+        { status: 400 }
+      );
+    }
+
+    // ── 2. Holding[] → AssetSnapshotHolding[] (snapshot_date 추가) ──────────
+    const snapshotHoldings = holdingsToSnapshotHoldings(currentHoldings, snapshotDate);
+
+    // ── 3. 현재가(market_data_cache)로 STOCK evaluated_amount 보정 ──────────
+    const quoteBundle = await fetchMarketDataBundleFromDb(supabase);
+    const holdingsForCalc = mergeQuotesIntoHoldings(snapshotHoldings, quoteBundle.quotes);
+
+    // ── 4. asset_snapshot_holdings 해당 날짜 삭제 → holdingsForCalc 기준 재저장 ──
+    const ashResult = await saveSnapshotHoldingsForDate(holdingsForCalc, snapshotDate);
+
+    // ── 5. 요약 계산 — holdingsForCalc 직접 사용 (asset_snapshot_holdings 재조회 없음) ──
+    const summary = computeSnapshotSummary(holdingsForCalc, usdkrw_rate);
+    const cashflows = await getCashflows();
+    const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
+    const itemRows = holdingsToSnapshotItems(snapshotDate, holdingsForCalc);
+
+    // ── 검증 로그: holdings 합산 vs 요약 ─────────────────────────────────────
+    console.log("[snapshot] holdings → summary 검증", {
+      snapshot_date: snapshotDate,
+      source: "holdings_table",
+      holdings_count: currentHoldings.length,
+      total_asset: Math.round(summary.total_asset),
+      kr_asset: Math.round(summary.kr_asset),
+      us_asset: Math.round(summary.us_asset),
+      stock_asset: Math.round(summary.stock_asset),
+      cash_asset: Math.round(summary.cash_asset),
+      usdkrw_rate,
+    });
+
+    if (repair) {
+      // ── 6a. repair: asset_snapshot_items 삭제 후 재삽입 ─────────────────
       const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
       if (!itemsResult.ok) {
         return NextResponse.json(
@@ -179,10 +293,12 @@ export async function GET(request: Request) {
 
       snapshotApiLog({
         snapshot_date: snapshotDate,
-        holdings_source_snapshot_date: sourceSnapshotDate,
+        holdings_count: currentHoldings.length,
         repair: true,
         deleted_item_count: itemsResult.deletedCount,
         inserted_item_count: itemsResult.insertedCount,
+        deleted_snapshot_holding_count: ashResult.deletedCount,
+        inserted_snapshot_holding_count: ashResult.insertedCount,
       });
 
       let summaryRecalculated = false;
@@ -252,23 +368,23 @@ export async function GET(request: Request) {
         reason: "repaired",
         mode: "repair" as const,
         snapshot_date: snapshotDate,
-        holdings_source_snapshot_date: sourceSnapshotDate,
+        holdings_count: currentHoldings.length,
         items_count: itemsResult.insertedCount,
         deleted_items_count: itemsResult.deletedCount,
+        snapshot_holding_count: ashResult.insertedCount,
         summary_recalculated: summaryRecalculated,
         usdkrw_rate,
+        summary: {
+          total_asset: Math.round(summary.total_asset),
+          kr_asset: Math.round(summary.kr_asset),
+          us_asset: Math.round(summary.us_asset),
+          stock_asset: Math.round(summary.stock_asset),
+          cash_asset: Math.round(summary.cash_asset),
+        },
       });
     }
 
-    const usdkrw_rate = await fetchUsdKrwForSnapshot(supabase, baseUrl);
-    const { holdings, sourceSnapshotDate } = await fetchLatestHoldings(supabase);
-    const quoteBundle = await fetchMarketDataBundleFromDb(supabase);
-    const holdingsForCalc = mergeQuotesIntoHoldings(holdings, quoteBundle.quotes);
-    const summary = computeSnapshotSummary(holdingsForCalc, usdkrw_rate);
-    const cashflows = await getCashflows();
-    const inv = computeSnapshotInvestmentMetrics(snapshotDate, summary.total_asset, cashflows);
-    const itemRows = holdingsToSnapshotItems(snapshotDate, holdingsForCalc);
-
+    // ── 6b. normal: asset_snapshot_items 삭제 후 재삽입 ─────────────────
     const itemsResult = await deleteAndInsertSnapshotItems(snapshotDate, itemRows);
     if (!itemsResult.ok) {
       return NextResponse.json(
@@ -286,10 +402,12 @@ export async function GET(request: Request) {
 
     snapshotApiLog({
       snapshot_date: snapshotDate,
-      holdings_source_snapshot_date: sourceSnapshotDate,
+      holdings_count: currentHoldings.length,
       repair: false,
       deleted_item_count: itemsResult.deletedCount,
       inserted_item_count: itemsResult.insertedCount,
+      deleted_snapshot_holding_count: ashResult.deletedCount,
+      inserted_snapshot_holding_count: ashResult.insertedCount,
     });
 
     const { error: insertSummaryErr } = await supabase.from("asset_snapshots").insert({
@@ -326,10 +444,18 @@ export async function GET(request: Request) {
       reason: "inserted",
       mode: "normal" as const,
       snapshot_date: snapshotDate,
-      holdings_source_snapshot_date: sourceSnapshotDate,
+      holdings_count: currentHoldings.length,
       items_count: itemRows.length,
       deleted_items_count: itemsResult.deletedCount,
+      snapshot_holding_count: ashResult.insertedCount,
       usdkrw_rate,
+      summary: {
+        total_asset: Math.round(summary.total_asset),
+        kr_asset: Math.round(summary.kr_asset),
+        us_asset: Math.round(summary.us_asset),
+        stock_asset: Math.round(summary.stock_asset),
+        cash_asset: Math.round(summary.cash_asset),
+      },
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
