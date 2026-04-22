@@ -34,12 +34,12 @@ export type AssetSnapshot = {
 };
 
 // ---------------------------------------------------------------------------
-// AssetSnapshotHolding  (localStorage key: "asset_snapshot_holdings")
+// HoldingBase  — 현재 보유현황·스냅샷 보유 공통 필드
 // ---------------------------------------------------------------------------
 
-export type AssetSnapshotHolding = {
+/** holdings / asset_snapshot_holdings 양쪽에서 공유하는 공통 구조 */
+export interface HoldingBase {
   id: string;
-  snapshot_date: string;    // "YYYY-MM-DD"
   name: string;
   symbol?: string;
   market?: string;
@@ -56,4 +56,30 @@ export type AssetSnapshotHolding = {
   target_max_weight?: number | null;
   asset_type?: string;
   created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Holding  — 현재 보유현황 원본 (holdings 테이블, snapshot_date 없음)
+// ---------------------------------------------------------------------------
+
+/**
+ * 현재 보유현황 원본.
+ * HoldingsManager 가 읽고 쓰는 단일 진실 원본(source of truth).
+ * 날짜 차원 없음 — 변경 이력은 asset_snapshot_holdings 참조.
+ */
+export type Holding = HoldingBase & {
+  /** DB 트리거가 UPDATE 시 자동 갱신 */
+  updated_at: string;
+};
+
+// ---------------------------------------------------------------------------
+// AssetSnapshotHolding  — 날짜별 스냅샷 보유 (asset_snapshot_holdings 테이블)
+// ---------------------------------------------------------------------------
+
+/**
+ * 날짜별 보유 스냅샷 기록.
+ * 현재 상태 편집에는 사용하지 않음 — 이력/차트 조회 전용.
+ */
+export type AssetSnapshotHolding = HoldingBase & {
+  snapshot_date: string;    // "YYYY-MM-DD"
 };
