@@ -48,6 +48,8 @@ const YAHOO_FC_URL    = "https://fc.yahoo.com";
 const STOOQ_BASE      = "https://stooq.com/q/l/";
 /** USDKRW 최종 백업 — Stooq/Yahoo 모두 실패 시 (open.er-api.com 무료 엔드포인트) */
 const OPEN_ER_USD_LATEST = "https://open.er-api.com/v6/latest/USD";
+const FINNHUB_QUOTE_URL = "https://finnhub.io/api/v1/quote";
+const FINNHUB_TOKEN = process.env.FINNHUB_TOKEN ?? "";
 const TIMEOUT_MS = 8000;
 
 const COMMON_HEADERS = {
@@ -287,6 +289,74 @@ async function fetchViaYahooQuote(
   }
 }
 
+// ── Finnhub quote fallback ────────────────────────────────────────────────────
+// Yahoo Finance 차단/실패 시 미국 주식용 폴백 (환율 심볼에는 사용하지 않음).
+
+async function fetchViaFinnhub(symbol: string, isDebug: boolean): Promise<number | null> {
+  if (!FINNHUB_TOKEN) return null;
+
+  const url = `${FINNHUB_QUOTE_URL}?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(FINNHUB_TOKEN)}`;
+
+  if (isDebug) {
+    console.log("[price/route] ▶ Finnhub | symbol:", symbol);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: { "User-Agent": COMMON_HEADERS["User-Agent"] },
+    });
+
+    if (isDebug) {
+      console.log("[price/route] ▶ Finnhub RESPONSE:", res.status, res.statusText);
+    }
+
+    if (!res.ok) {
+      console.warn("[price/route] ✗ Finnhub non-ok:", res.status, "for", symbol);
+      return null;
+    }
+
+    const data = (await readJsonFromExternalResponse(res, "Finnhub", url)) as {
+      c?: number | null;
+      pc?: number | null;
+    } | null;
+    if (!data) return null;
+
+    const current = typeof data.c === "number" ? data.c : null;
+    const prevClose = typeof data.pc === "number" ? data.pc : null;
+    const price =
+      current != null && current > 0
+        ? current
+        : prevClose != null && prevClose > 0
+          ? prevClose
+          : null;
+
+    if (isDebug) {
+      const usedField =
+        current != null && current > 0 ? "c"
+        : prevClose != null && prevClose > 0 ? "pc (fallback)"
+        : "null — 유효 필드 없음";
+      console.log("[price/route] ▶ Finnhub FINAL price:", price, "| field:", usedField);
+    }
+
+    if (price == null) {
+      console.warn("[price/route] ✗ Finnhub null price for", symbol,
+        "| c:", data.c, "| pc:", data.pc);
+    }
+
+    return price;
+  } catch (err) {
+    console.error("[price/route] ✗ Finnhub 에러 for", symbol, ":", err);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Stooq CSV fallback ────────────────────────────────────────────────────────
 // Yahoo Finance rate limit 시 최종 fallback.
 // CSV 형식(f=sd2t2ohlcvn): symbol,date,time,open,high,low,close,volume,name
@@ -464,7 +534,7 @@ async function fetchViaOpenErUsdKrw(isDebug: boolean): Promise<number | null> {
 }
 
 // ── 단일 심볼 현재가 조회 ─────────────────────────────────────────────────────
-// 우선순위: Yahoo v8/chart (crumb) → Yahoo v7/quote (crumb) → Stooq CSV
+// 우선순위(미국): Yahoo v8/chart → Yahoo v7/quote → Finnhub → Stooq CSV
 
 async function fetchOnePrice(
   symbol: string,
@@ -506,9 +576,19 @@ async function fetchOnePrice(
   const priceQuote = await fetchViaYahooQuote(normalized, session, isDebug);
   if (priceQuote != null && priceQuote > 0) return priceQuote;
 
-  // 3차: Stooq CSV fallback (Yahoo 완전 실패 시)
+  // 3차: Finnhub (미국 주식, Yahoo 실패 시 — 환율 심볼 제외)
+  let priceFinnhub: number | null = null;
+  if (!isUsdKrwYahooSymbol(normalized)) {
+    if (isDebug) {
+      console.log("[price/route] ⚠ Yahoo 모두 실패 → Finnhub fallback | symbol:", normalized);
+    }
+    priceFinnhub = await fetchViaFinnhub(normalized, isDebug);
+    if (priceFinnhub != null && priceFinnhub > 0) return priceFinnhub;
+  }
+
+  // 4차: Stooq CSV fallback
   if (isDebug) {
-    console.log("[price/route] ⚠ Yahoo 모두 실패 → Stooq fallback | symbol:", normalized);
+    console.log("[price/route] ⚠ Finnhub 실패/건너뜀 → Stooq fallback | symbol:", normalized);
   }
   const priceStooq = await fetchViaStooq(normalized, isDebug);
   if (priceStooq != null && priceStooq > 0) return priceStooq;
@@ -524,7 +604,7 @@ async function fetchOnePrice(
   }
 
   console.warn("[price/route] ✗ 모든 소스 실패 | symbol:", normalized,
-    "| v8:", priceChart, "| v7:", priceQuote, "| Stooq:", priceStooq);
+    "| v8:", priceChart, "| v7:", priceQuote, "| Finnhub:", priceFinnhub, "| Stooq:", priceStooq);
   if (isUsdKrwYahooSymbol(normalized)) {
     console.warn(
       "[price/route] USDKRW 실패 요약: Stooq·Yahoo·OpenEr 모두 실패했을 수 있습니다."
