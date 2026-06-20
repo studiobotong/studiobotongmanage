@@ -33,7 +33,7 @@ const navItems = [
     icon: BoxesIcon,
   },
   {
-    label: "Products",
+    label: "상품 관리",
     href: "/products",
     icon: Package,
   },
