@@ -25,6 +25,7 @@ import {
   deleteProduct,
   upsertProductsFromCsv,
 } from "@/lib/products";
+import { toHttpsImageUrl } from "@/lib/utils/imageUrl";
 import type { BotongProduct, ProductFormData } from "@/types/products";
 
 type SortMode = "stock" | "name";
@@ -369,7 +370,7 @@ export default function ProductsPageClient() {
                           {product.image_url ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
-                              src={product.image_url}
+                              src={toHttpsImageUrl(product.image_url)}
                               alt=""
                               className="h-10 w-10 rounded-lg border border-gray-100 object-cover"
                             />

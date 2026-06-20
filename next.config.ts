@@ -9,11 +9,6 @@ const nextConfig: NextConfig = {
         pathname: "/**",
       },
       {
-        protocol: "http",
-        hostname: "**.phinf.naver.net",
-        pathname: "/**",
-      },
-      {
         protocol: "https",
         hostname: "**.phinf.naver.net",
         pathname: "/**",

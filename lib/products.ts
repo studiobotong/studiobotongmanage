@@ -1,10 +1,17 @@
 import { supabase } from "./supabaseClient";
+import { toHttpsImageUrl } from "@/lib/utils/imageUrl";
 import type {
   BotongProduct,
   CsvUploadResult,
   ProductCsvRow,
   ProductFormData,
 } from "@/types/products";
+
+function normalizeImageUrl(url: string | null | undefined): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+  return toHttpsImageUrl(trimmed);
+}
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -53,7 +60,7 @@ export async function createProduct(
       option_name: form.option_name.trim(),
       sku: form.sku.trim() || null,
       category: form.category.trim() || null,
-      image_url: form.image_url.trim() || null,
+      image_url: normalizeImageUrl(form.image_url),
       selling_price: form.selling_price,
       cost_price: form.cost_price,
       stock_qty: form.stock_qty,
@@ -88,9 +95,16 @@ export async function updateProduct(
     >
   >
 ): Promise<{ error: string | null }> {
+  const payload = {
+    ...fields,
+    ...(fields.image_url !== undefined && {
+      image_url: normalizeImageUrl(fields.image_url),
+    }),
+  };
+
   const { error } = await supabase
     .from("botong_products")
-    .update(fields)
+    .update(payload)
     .eq("id", id);
 
   if (error) {
@@ -147,7 +161,7 @@ export async function upsertProductsFromCsv(
             option_name: "",
             sku: row.sku,
             category: row.category,
-            image_url: row.image_url,
+            image_url: normalizeImageUrl(row.image_url),
             selling_price: row.selling_price,
             cost_price: 0,
             stock_qty: row.stock_qty,
@@ -169,7 +183,7 @@ export async function upsertProductsFromCsv(
           .update({
             sku: row.sku,
             category: row.category,
-            image_url: row.image_url,
+            image_url: normalizeImageUrl(row.image_url),
             selling_price: row.selling_price,
             stock_qty: row.stock_qty,
             is_active: row.is_active,

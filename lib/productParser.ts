@@ -1,4 +1,5 @@
 import Papa from "papaparse";
+import { toHttpsImageUrl } from "@/lib/utils/imageUrl";
 import type { ProductCsvRow } from "@/types/products";
 
 const REQUIRED_HEADERS = [
@@ -88,7 +89,10 @@ export function parseProductCsv(text: string): {
         row["중분류"],
         row["소분류"]
       ),
-      image_url: getField(row, "대표이미지 URL") || null,
+      image_url: (() => {
+        const url = getField(row, "대표이미지 URL");
+        return url ? toHttpsImageUrl(url) : null;
+      })(),
       selling_price: parseNumber(row["판매가"]),
       stock_qty: parseNumber(row["재고수량"]),
       is_active: parseActiveStatus(row["판매상태"]),
