@@ -11,6 +11,7 @@ import {
   Settings,
   LogOut,
   Sparkles,
+  ClipboardList,
   Landmark,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -26,6 +27,11 @@ const navItems = [
     label: "Sales",
     href: "/sales",
     icon: ShoppingCart,
+  },
+  {
+    label: "주문 관리",
+    href: "/orders",
+    icon: ClipboardList,
   },
   {
     label: "Inventory",
