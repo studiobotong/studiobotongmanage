@@ -29,6 +29,7 @@ export default function OrderUploadClient() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState("");
+  const [applyStock, setApplyStock] = useState(true);
   const [dragOver, setDragOver] = useState(false);
   const [state, setState] = useState<UploadState>("idle");
   const [errorMsg, setErrorMsg] = useState("");
@@ -78,6 +79,7 @@ export default function OrderUploadClient() {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("password", password);
+      formData.append("applyStock", applyStock ? "true" : "false");
 
       const res = await fetch("/api/orders/upload", {
         method: "POST",
@@ -108,7 +110,7 @@ export default function OrderUploadClient() {
       <div className="px-8 py-8">
         <PageHeader
           title="주문 엑셀 업로드"
-          description="스마트스토어 '전체주문발주발송관리' 엑셀을 업로드합니다"
+          description="스마트스토어 '전체주문발주발송관리' 또는 '구매확정내역' 엑셀을 업로드합니다"
           actions={
             <Link href="/orders">
               <Button variant="secondary" size="sm" icon={ArrowLeft}>
@@ -150,7 +152,7 @@ export default function OrderUploadClient() {
                     파일을 드래그하거나 클릭하여 선택
                   </p>
                   <p className="mt-1 text-xs text-gray-400">
-                    발주발송관리 시트가 포함된 .xlsx
+                    발주발송관리 · 구매확정내역 시트가 포함된 .xlsx
                   </p>
                 </>
               )}
@@ -179,6 +181,24 @@ export default function OrderUploadClient() {
                 네이버 스마트스토어에서 비밀번호 보호 옵션으로 다운로드한 파일은
                 비밀번호가 필요합니다.
               </p>
+            </div>
+
+            <div className="mt-5">
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-gray-200 px-3 py-2.5 hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={applyStock}
+                  onChange={(e) => setApplyStock(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#5b6af4] focus:ring-[#5b6af4]/20"
+                />
+                <span className="text-sm text-gray-700">
+                  이 업로드로 재고를 차감하시겠습니까?
+                  <span className="mt-0.5 block text-xs text-gray-400">
+                    과거 이력 엑셀처럼 이미 처리된 주문을 업로드할 때는 체크를
+                    해제하세요. 재고가 중복으로 차감되는 것을 막을 수 있습니다.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="mt-5 flex gap-2">
@@ -235,6 +255,13 @@ export default function OrderUploadClient() {
                 <div className="flex items-center gap-2 text-sm font-medium text-emerald-600">
                   <CheckCircle2 className="h-4 w-4" />
                   업로드 완료
+                </div>
+
+                <div className="rounded-xl bg-gray-50 px-4 py-2.5 text-sm text-gray-600">
+                  재고 반영:{" "}
+                  <span className="font-semibold text-gray-800">
+                    {result.stockApplied ? "적용함" : "적용 안 함"}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

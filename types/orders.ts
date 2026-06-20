@@ -58,6 +58,8 @@ export interface OrderUploadResult {
   totalRows: number;
   elapsedMs: number;
   errors: string[];
+  /** 업로드 시 재고 차감 옵션 적용 여부 (사용자 선택값) */
+  stockApplied: boolean;
 }
 
 export interface OrderListFilters {

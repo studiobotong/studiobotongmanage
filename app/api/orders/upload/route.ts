@@ -25,6 +25,8 @@ export async function POST(request: Request) {
       );
     }
 
+    const applyStock = formData.get("applyStock") !== "false";
+
     const buffer = await file.arrayBuffer();
     const { rows, errors: parseErrors } = await parseOrderExcel(
       buffer,
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await processOrderUpload(rows);
+    const result = await processOrderUpload(rows, { applyStock });
 
     return NextResponse.json({
       ok: true,

@@ -116,8 +116,10 @@ async function deductStock(
 }
 
 export async function processOrderUpload(
-  rows: ParsedOrderRow[]
+  rows: ParsedOrderRow[],
+  options: { applyStock?: boolean } = {}
 ): Promise<OrderUploadResult> {
+  const applyStock = options.applyStock !== false;
   const started = Date.now();
   const result: OrderUploadResult = {
     inserted: 0,
@@ -127,9 +129,10 @@ export async function processOrderUpload(
     totalRows: rows.length,
     elapsedMs: 0,
     errors: [],
+    stockApplied: applyStock,
   };
 
-  const autoDeduct = await isAutoDeductStockEnabled();
+  const autoDeduct = applyStock && (await isAutoDeductStockEnabled());
   const seenInBatch = new Set<string>();
   const unmatchedMap = new Map<string, UnmatchedProduct>();
 

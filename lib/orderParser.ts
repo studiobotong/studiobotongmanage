@@ -3,6 +3,9 @@ import { decrypt as decryptOfficeFile } from "officecrypto-tool";
 import type { ParsedOrderRow } from "@/types/orders";
 
 export const ORDER_SHEET_NAME = "발주발송관리";
+export const PURCHASE_CONFIRMATION_SHEET_NAME = "구매확정내역";
+
+export type OrderExcelFormat = "fulfillment" | "purchase_confirmation";
 
 export const ORDER_HEADERS = [
   "상품주문번호",
@@ -151,6 +154,7 @@ function mapRow(record: Record<string, unknown>): ParsedOrderRow | null {
   const orderDate =
     parseDateTime(record["주문일시"]) ??
     parseDateTime(record["결제일"]) ??
+    parseDateTime(record["구매확정일"]) ??
     parseDateTime(record["발송일"]);
 
   return {
@@ -211,18 +215,27 @@ export async function decryptExcelBuffer(
   }
 }
 
-export function parseOrderWorkbook(buffer: Buffer): {
-  rows: ParsedOrderRow[];
-  errors: string[];
-} {
-  const errors: string[] = [];
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
-  const sheetName = workbook.SheetNames.includes(ORDER_SHEET_NAME)
-    ? ORDER_SHEET_NAME
-    : workbook.SheetNames[0];
+function isHeaderRow(row: unknown[]): boolean {
+  return toStr(row[0]) === "상품주문번호";
+}
 
+function detectOrderExcelFormat(workbook: XLSX.WorkBook): {
+  format: OrderExcelFormat | null;
+  sheetName: string;
+} {
+  if (workbook.SheetNames.includes(PURCHASE_CONFIRMATION_SHEET_NAME)) {
+    return {
+      format: "purchase_confirmation",
+      sheetName: PURCHASE_CONFIRMATION_SHEET_NAME,
+    };
+  }
+  if (workbook.SheetNames.includes(ORDER_SHEET_NAME)) {
+    return { format: "fulfillment", sheetName: ORDER_SHEET_NAME };
+  }
+
+  const sheetName = workbook.SheetNames[0] ?? "";
   if (!sheetName) {
-    return { rows: [], errors: ["시트를 찾을 수 없습니다."] };
+    return { format: null, sheetName: "" };
   }
 
   const sheet = workbook.Sheets[sheetName];
@@ -232,20 +245,33 @@ export function parseOrderWorkbook(buffer: Buffer): {
     raw: false,
   });
 
-  if (matrix.length < 3) {
-    return { rows: [], errors: ["데이터 행이 없습니다."] };
+  if (isHeaderRow(matrix[0] ?? [])) {
+    return { format: "purchase_confirmation", sheetName };
   }
 
-  const headerRow = matrix[1] ?? [];
+  if (matrix.length >= 2 && isHeaderRow(matrix[1] ?? [])) {
+    return { format: "fulfillment", sheetName };
+  }
+
+  return { format: null, sheetName };
+}
+
+function parseRowsFromMatrix(
+  matrix: unknown[][],
+  headerRowIndex: number,
+  dataStartIndex: number
+): { rows: ParsedOrderRow[]; errors: string[] } {
+  const errors: string[] = [];
+  const headerRow = matrix[headerRowIndex] ?? [];
   const headers = headerRow.map((h) => toStr(h));
 
   if (!headers.includes("상품주문번호")) {
-    errors.push("헤더 행(2행)에서 '상품주문번호' 컬럼을 찾을 수 없습니다.");
+    errors.push("'상품주문번호' 컬럼을 찾을 수 없습니다.");
     return { rows: [], errors };
   }
 
   const rows: ParsedOrderRow[] = [];
-  for (let i = 2; i < matrix.length; i++) {
+  for (let i = dataStartIndex; i < matrix.length; i++) {
     const cells = matrix[i] ?? [];
     if (cells.every((c) => isEmptyValue(c))) continue;
 
@@ -262,10 +288,65 @@ export function parseOrderWorkbook(buffer: Buffer): {
   return { rows, errors };
 }
 
+function parseFulfillmentMatrix(matrix: unknown[][]): {
+  rows: ParsedOrderRow[];
+  errors: string[];
+} {
+  if (matrix.length < 3) {
+    return { rows: [], errors: ["데이터 행이 없습니다."] };
+  }
+  return parseRowsFromMatrix(matrix, 1, 2);
+}
+
+function parsePurchaseConfirmationMatrix(matrix: unknown[][]): {
+  rows: ParsedOrderRow[];
+  errors: string[];
+} {
+  if (matrix.length < 2) {
+    return { rows: [], errors: ["데이터 행이 없습니다."] };
+  }
+  return parseRowsFromMatrix(matrix, 0, 1);
+}
+
+export function parseOrderWorkbook(buffer: Buffer): {
+  rows: ParsedOrderRow[];
+  errors: string[];
+  format: OrderExcelFormat | null;
+} {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+  const { format, sheetName } = detectOrderExcelFormat(workbook);
+
+  if (!format || !sheetName) {
+    return {
+      rows: [],
+      errors: ["지원하지 않는 엑셀 형식입니다."],
+      format: null,
+    };
+  }
+
+  const sheet = workbook.Sheets[sheetName];
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: null,
+    raw: false,
+  });
+
+  const parsed =
+    format === "purchase_confirmation"
+      ? parsePurchaseConfirmationMatrix(matrix)
+      : parseFulfillmentMatrix(matrix);
+
+  return { ...parsed, format };
+}
+
 export async function parseOrderExcel(
   buffer: ArrayBuffer,
   password: string
-): Promise<{ rows: ParsedOrderRow[]; errors: string[] }> {
+): Promise<{
+  rows: ParsedOrderRow[];
+  errors: string[];
+  format: OrderExcelFormat | null;
+}> {
   const decrypted = await decryptExcelBuffer(buffer, password);
   return parseOrderWorkbook(decrypted);
 }
