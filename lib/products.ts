@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient";
-import { toHttpsImageUrl } from "@/lib/utils/imageUrl";
+import { normalizeNaverImageUrl } from "@/lib/utils/imageUrl";
 import type {
   BotongProduct,
   CsvUploadResult,
@@ -10,7 +10,7 @@ import type {
 function normalizeImageUrl(url: string | null | undefined): string | null {
   const trimmed = url?.trim();
   if (!trimmed) return null;
-  return toHttpsImageUrl(trimmed);
+  return normalizeNaverImageUrl(trimmed);
 }
 
 function toNum(v: unknown): number {

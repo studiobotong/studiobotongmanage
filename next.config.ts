@@ -8,11 +8,6 @@ const nextConfig: NextConfig = {
         hostname: "**.pstatic.net",
         pathname: "/**",
       },
-      {
-        protocol: "https",
-        hostname: "**.phinf.naver.net",
-        pathname: "/**",
-      },
     ],
   },
 };

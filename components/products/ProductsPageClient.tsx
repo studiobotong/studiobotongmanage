@@ -25,7 +25,7 @@ import {
   deleteProduct,
   upsertProductsFromCsv,
 } from "@/lib/products";
-import { toHttpsImageUrl } from "@/lib/utils/imageUrl";
+import { normalizeNaverImageUrl } from "@/lib/utils/imageUrl";
 import type { BotongProduct, ProductFormData } from "@/types/products";
 
 type SortMode = "stock" | "name";
@@ -60,6 +60,29 @@ function productToForm(p: BotongProduct): ProductFormData {
     is_active: p.is_active,
     sku: p.sku ?? "",
   };
+}
+
+function ProductThumbnail({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = normalizeNaverImageUrl(url);
+
+  if (!src || failed) {
+    return (
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-xs text-gray-300">
+        —
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      onError={() => setFailed(true)}
+      className="h-10 w-10 rounded-lg border border-gray-100 object-cover"
+    />
+  );
 }
 
 export default function ProductsPageClient() {
@@ -368,12 +391,7 @@ export default function ProductsPageClient() {
                       >
                         <td className="px-4 py-3">
                           {product.image_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={toHttpsImageUrl(product.image_url)}
-                              alt=""
-                              className="h-10 w-10 rounded-lg border border-gray-100 object-cover"
-                            />
+                            <ProductThumbnail url={product.image_url} />
                           ) : (
                             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-xs text-gray-300">
                               —
