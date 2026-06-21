@@ -74,6 +74,14 @@ export interface OrderListFilters {
   orderStatus?: string;
   confirmationStatus?: ConfirmationStatus | "";
   search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface OrderListResult {
+  orders: BotongOrder[];
+  totalCount: number;
+  totalSettlement: number;
 }
 
 export interface OrderStockDeduction {

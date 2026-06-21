@@ -8,11 +8,17 @@ import type {
   ConfirmationStatus,
   OrderDeleteResult,
   OrderListFilters,
+  OrderListResult,
   OrderStockDeduction,
   OrderUploadResult,
   ParsedOrderRow,
   UnmatchedProduct,
 } from "@/types/orders";
+
+const ORDER_LIST_PAGE_SIZE = 50;
+
+const ORDER_LIST_COLUMNS =
+  "id, product_order_no, order_no, order_date, product_name, option_name, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at";
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -316,39 +322,91 @@ export async function processOrderUpload(
   return result;
 }
 
-export async function getOrders(
-  filters: OrderListFilters = {}
-): Promise<BotongOrder[]> {
-  let query = supabase
-    .from("botong_orders")
-    .select(
-      "id, product_order_no, order_no, order_date, product_name, option_name, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at"
-    )
-    .order("order_date", { ascending: false });
-
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyOrderListFilters(query: any, filters: OrderListFilters): any {
+  let q = query;
   if (filters.dateFrom) {
-    query = query.gte("order_date", filters.dateFrom);
+    q = q.gte("order_date", filters.dateFrom);
   }
   if (filters.dateTo) {
-    query = query.lte("order_date", `${filters.dateTo}T23:59:59`);
+    q = q.lte("order_date", `${filters.dateTo}T23:59:59`);
   }
   if (filters.orderStatus) {
-    query = query.eq("order_status", filters.orderStatus);
+    q = q.eq("order_status", filters.orderStatus);
   }
   if (filters.confirmationStatus) {
-    query = query.eq("confirmation_status", filters.confirmationStatus);
+    q = q.eq("confirmation_status", filters.confirmationStatus);
   }
   if (filters.search?.trim()) {
-    query = query.ilike("product_name", `%${filters.search.trim()}%`);
+    q = q.ilike("product_name", `%${filters.search.trim()}%`);
+  }
+  return q;
+}
+
+function sumSettlementAmounts(data: unknown): number {
+  if (!Array.isArray(data)) return 0;
+  return data.reduce(
+    (sum, row) => sum + toNum((row as Record<string, unknown>).settlement_amount),
+    0
+  );
+}
+
+export async function getOrders(
+  filters: OrderListFilters = {}
+): Promise<OrderListResult> {
+  const page = Math.max(1, filters.page ?? 1);
+  const pageSize = filters.pageSize ?? ORDER_LIST_PAGE_SIZE;
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  const empty: OrderListResult = {
+    orders: [],
+    totalCount: 0,
+    totalSettlement: 0,
+  };
+
+  const listQuery = applyOrderListFilters(
+    supabase
+      .from("botong_orders")
+      .select(ORDER_LIST_COLUMNS)
+      .order("order_date", { ascending: false }),
+    filters
+  ).range(from, to);
+
+  const countQuery = applyOrderListFilters(
+    supabase.from("botong_orders").select("id", { count: "exact", head: true }),
+    filters
+  );
+
+  const settlementQuery = applyOrderListFilters(
+    supabase.from("botong_orders").select("settlement_amount"),
+    filters
+  );
+
+  const [listResult, countResult, settlementResult] = await Promise.all([
+    listQuery,
+    countQuery,
+    settlementQuery,
+  ]);
+
+  if (listResult.error) {
+    console.error("[orders] getOrders 목록 오류:", listResult.error.message);
+    return empty;
+  }
+  if (countResult.error) {
+    console.error("[orders] getOrders 건수 오류:", countResult.error.message);
+  }
+  if (settlementResult.error) {
+    console.error("[orders] getOrders 합계 오류:", settlementResult.error.message);
   }
 
-  const { data, error } = await query;
-  if (error) {
-    console.error("[orders] getOrders 오류:", error.message);
-    return [];
-  }
-
-  return (data ?? []).map((r) => mapOrderRow(r as Record<string, unknown>));
+  return {
+    orders: ((listResult.data ?? []) as Record<string, unknown>[]).map((r) =>
+      mapOrderRow(r)
+    ),
+    totalCount: countResult.count ?? 0,
+    totalSettlement: sumSettlementAmounts(settlementResult.data),
+  };
 }
 
 export async function getDistinctOrderStatuses(): Promise<string[]> {

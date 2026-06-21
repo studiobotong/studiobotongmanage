@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Upload, Search, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Upload, Search, Loader2, RefreshCw, Trash2, ChevronLeft, ChevronRight } from "lucide-react";
 import clsx from "clsx";
 import Header from "@/components/Header";
 import PageHeader from "@/components/PageHeader";
@@ -51,6 +51,12 @@ const statusStyle: Record<string, string> = {
   취소: "bg-red-50 text-red-500",
 };
 
+const PAGE_SIZE = 50;
+
+function resetPage(setPage: (page: number) => void) {
+  setPage(1);
+}
+
 const confirmationBadge: Record<
   ConfirmationStatus,
   { label: string; className: string }
@@ -68,6 +74,9 @@ const confirmationBadge: Record<
 export default function OrdersPageClient() {
   const pathname = usePathname();
   const [orders, setOrders] = useState<BotongOrder[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalSettlement, setTotalSettlement] = useState(0);
+  const [page, setPage] = useState(1);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [dateFrom, setDateFrom] = useState(monthAgoIso());
@@ -89,23 +98,31 @@ export default function OrdersPageClient() {
   const loadOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const [rows, statusList] = await Promise.all([
+      const [result, statusList] = await Promise.all([
         getOrders({
           dateFrom: dateFrom || undefined,
           dateTo: dateTo || undefined,
           orderStatus: orderStatus || undefined,
           confirmationStatus: confirmationStatus || undefined,
           search: search || undefined,
+          page,
+          pageSize: PAGE_SIZE,
         }),
         getDistinctOrderStatuses(),
       ]);
-      setOrders(rows);
+      setOrders(result.orders);
+      setTotalCount(result.totalCount);
+      setTotalSettlement(result.totalSettlement);
       setStatuses(statusList);
       setSelectedIds(new Set());
+
+      if (result.orders.length === 0 && page > 1 && result.totalCount > 0) {
+        setPage(page - 1);
+      }
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, orderStatus, confirmationStatus, search]);
+  }, [dateFrom, dateTo, orderStatus, confirmationStatus, search, page]);
 
   useEffect(() => {
     void loadOrders();
@@ -125,10 +142,9 @@ export default function OrdersPageClient() {
     }
   }, [pathname]);
 
-  const totalSettlement = useMemo(
-    () => orders.reduce((sum, o) => sum + o.settlement_amount, 0),
-    [orders]
-  );
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const pageStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const pageEnd = Math.min(page * PAGE_SIZE, totalCount);
 
   const allSelected =
     orders.length > 0 && orders.every((o) => selectedIds.has(o.id));
@@ -179,14 +195,9 @@ export default function OrdersPageClient() {
         return;
       }
 
-      setOrders((prev) => prev.filter((o) => o.id !== deleteTarget.id));
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(deleteTarget.id);
-        return next;
-      });
       setDeleteTarget(null);
       setToast({ message: "주문이 삭제되었습니다.", type: "success" });
+      await loadOrders();
     } finally {
       setDeleting(false);
     }
@@ -220,7 +231,6 @@ export default function OrdersPageClient() {
 
       const deleted = result.deleted ?? 0;
       const restored = result.restoredOrders ?? 0;
-      setOrders((prev) => prev.filter((o) => !selectedIds.has(o.id)));
       setSelectedIds(new Set());
       setBulkDeleteOpen(false);
 
@@ -229,6 +239,7 @@ export default function OrdersPageClient() {
         message += ` (${restored}건 재고 복구)`;
       }
       setToast({ message, type: "success" });
+      await loadOrders();
     } finally {
       setDeleting(false);
     }
@@ -280,7 +291,10 @@ export default function OrdersPageClient() {
               <input
                 type="date"
                 value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
+                onChange={(e) => {
+                  setDateFrom(e.target.value);
+                  resetPage(setPage);
+                }}
                 className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#5b6af4] focus:ring-2 focus:ring-[#5b6af4]/20"
               />
             </div>
@@ -291,7 +305,10 @@ export default function OrdersPageClient() {
               <input
                 type="date"
                 value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
+                onChange={(e) => {
+                  setDateTo(e.target.value);
+                  resetPage(setPage);
+                }}
                 className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#5b6af4] focus:ring-2 focus:ring-[#5b6af4]/20"
               />
             </div>
@@ -301,11 +318,12 @@ export default function OrdersPageClient() {
               </label>
               <select
                 value={confirmationStatus}
-                onChange={(e) =>
+                onChange={(e) => {
                   setConfirmationStatus(
                     e.target.value as ConfirmationStatus | ""
-                  )
-                }
+                  );
+                  resetPage(setPage);
+                }}
                 className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#5b6af4] focus:ring-2 focus:ring-[#5b6af4]/20"
               >
                 <option value="">전체</option>
@@ -319,7 +337,10 @@ export default function OrdersPageClient() {
               </label>
               <select
                 value={orderStatus}
-                onChange={(e) => setOrderStatus(e.target.value)}
+                onChange={(e) => {
+                  setOrderStatus(e.target.value);
+                  resetPage(setPage);
+                }}
                 className="rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#5b6af4] focus:ring-2 focus:ring-[#5b6af4]/20"
               >
                 <option value="">전체</option>
@@ -339,7 +360,10 @@ export default function OrdersPageClient() {
                 <input
                   type="text"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    resetPage(setPage);
+                  }}
                   placeholder="상품명 입력"
                   className="w-full rounded-xl border border-gray-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-[#5b6af4] focus:ring-2 focus:ring-[#5b6af4]/20"
                 />
@@ -362,7 +386,12 @@ export default function OrdersPageClient() {
             <div>
               <h3 className="text-sm font-semibold text-gray-700">주문 내역</h3>
               <p className="mt-0.5 text-xs text-gray-400">
-                {orders.length}건 · 정산예정 합계 {formatKrw(totalSettlement)}원
+                {totalCount}건 · 정산예정 합계 {formatKrw(totalSettlement)}원
+                {totalCount > 0 && (
+                  <span className="ml-1 text-gray-300">
+                    ({pageStart}–{pageEnd}건 표시)
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -381,6 +410,7 @@ export default function OrdersPageClient() {
               로 주문을 등록하세요.
             </div>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -492,6 +522,74 @@ export default function OrdersPageClient() {
                 </tbody>
               </table>
             </div>
+
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between border-t border-gray-50 px-2 pt-4">
+                <p className="text-xs text-gray-400">
+                  {page} / {totalPages} 페이지
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page <= 1 || loading}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="이전 페이지"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter(
+                      (p) =>
+                        p === 1 ||
+                        p === totalPages ||
+                        Math.abs(p - page) <= 2
+                    )
+                    .reduce<(number | "ellipsis")[]>((acc, p, idx, arr) => {
+                      if (idx > 0 && p - (arr[idx - 1] as number) > 1) {
+                        acc.push("ellipsis");
+                      }
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((item, idx) =>
+                      item === "ellipsis" ? (
+                        <span
+                          key={`ellipsis-${idx}`}
+                          className="px-1 text-xs text-gray-300"
+                        >
+                          …
+                        </span>
+                      ) : (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => setPage(item)}
+                          disabled={loading}
+                          className={clsx(
+                            "inline-flex h-8 min-w-8 items-center justify-center rounded-lg px-2 text-xs font-medium transition-colors",
+                            item === page
+                              ? "bg-[#5b6af4] text-white"
+                              : "text-gray-600 hover:bg-gray-100"
+                          )}
+                        >
+                          {item}
+                        </button>
+                      )
+                    )}
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page >= totalPages || loading}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="다음 페이지"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+            </>
           )}
 
           {someSelected && !loading && orders.length > 0 && (
