@@ -85,6 +85,17 @@ function toStr(v: unknown): string {
   return String(v).trim();
 }
 
+function normalizeProductNo(v: unknown): string | null {
+  if (isEmptyValue(v)) return null;
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return String(Math.trunc(v));
+  }
+  const raw = toStr(v);
+  if (!raw) return null;
+  if (/^\d+\.0+$/.test(raw)) return raw.replace(/\.0+$/, "");
+  return raw;
+}
+
 export function parseNumber(v: unknown): number {
   if (isEmptyValue(v)) return 0;
   if (typeof v === "number" && Number.isFinite(v)) return v;
@@ -163,6 +174,7 @@ function mapRow(record: Record<string, unknown>): ParsedOrderRow | null {
     order_date: orderDate,
     product_name: toStr(record["상품명"]),
     option_name: optionRaw,
+    naver_product_no: normalizeProductNo(record["상품번호"]),
     quantity: parseNumber(record["수량"]),
     product_price: parseNumber(record["상품가격"]),
     total_order_amount: parseNumber(record["최종 상품별 총 주문금액"]),

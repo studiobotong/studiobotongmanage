@@ -7,6 +7,7 @@ export interface BotongOrder {
   order_date: string;
   product_name: string;
   option_name: string;
+  naver_product_no: string | null;
   product_id: string | null;
   quantity: number;
   product_price: number;
@@ -32,6 +33,7 @@ export interface ParsedOrderRow {
   order_date: string | null;
   product_name: string;
   option_name: string;
+  naver_product_no: string | null;
   quantity: number;
   product_price: number;
   total_order_amount: number;

@@ -18,7 +18,7 @@ import type {
 const ORDER_LIST_PAGE_SIZE = 50;
 
 const ORDER_LIST_COLUMNS =
-  "id, product_order_no, order_no, order_date, product_name, option_name, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at";
+  "id, product_order_no, order_no, order_date, product_name, option_name, naver_product_no, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at";
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -37,6 +37,8 @@ function mapOrderRow(r: Record<string, unknown>): BotongOrder {
     order_date: String(r.order_date ?? ""),
     product_name: String(r.product_name ?? ""),
     option_name: String(r.option_name ?? ""),
+    naver_product_no:
+      r.naver_product_no != null ? String(r.naver_product_no) : null,
     product_id: r.product_id != null ? String(r.product_id) : null,
     quantity: toNum(r.quantity),
     product_price: toNum(r.product_price),
@@ -77,7 +79,23 @@ function bumpUnmatched(
   }
 }
 
-async function findProductId(
+async function findProductIdBySku(
+  naverProductNo: string
+): Promise<string | null> {
+  const sku = naverProductNo.trim();
+  if (!sku) return null;
+
+  const { data, error } = await supabase
+    .from("botong_products")
+    .select("id")
+    .eq("sku", sku)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return String(data.id);
+}
+
+async function findProductIdByNameAndOption(
   productName: string,
   optionName: string
 ): Promise<string | null> {
@@ -92,6 +110,19 @@ async function findProductId(
   return String(data.id);
 }
 
+async function findProductId(
+  productName: string,
+  optionName: string,
+  naverProductNo: string | null
+): Promise<string | null> {
+  if (naverProductNo?.trim()) {
+    const bySku = await findProductIdBySku(naverProductNo);
+    if (bySku) return bySku;
+  }
+
+  return findProductIdByNameAndOption(productName, optionName);
+}
+
 function buildOrderPayload(
   row: ParsedOrderRow,
   productId: string | null,
@@ -103,6 +134,7 @@ function buildOrderPayload(
     order_date: row.order_date,
     product_name: row.product_name,
     option_name: row.option_name,
+    naver_product_no: row.naver_product_no,
     product_id: productId,
     quantity: row.quantity,
     product_price: row.product_price,
@@ -204,7 +236,11 @@ export async function processOrderUpload(
       continue;
     }
 
-    const productId = await findProductId(row.product_name, row.option_name);
+    const productId = await findProductId(
+      row.product_name,
+      row.option_name,
+      row.naver_product_no
+    );
 
     if (format === "purchase_confirmation") {
       if (existing) {
