@@ -1,3 +1,5 @@
+export type ConfirmationStatus = "provisional" | "confirmed";
+
 export interface BotongOrder {
   id: string;
   product_order_no: string;
@@ -18,6 +20,7 @@ export interface BotongOrder {
   payment_method: string;
   channel: string;
   buyer_id_masked: string | null;
+  confirmation_status: ConfirmationStatus;
   raw_row: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -52,6 +55,9 @@ export interface UnmatchedProduct {
 
 export interface OrderUploadResult {
   inserted: number;
+  insertedProvisional: number;
+  insertedConfirmed: number;
+  upgradedToConfirmed: number;
   skipped: number;
   unmatched: number;
   unmatchedProducts: UnmatchedProduct[];
@@ -66,6 +72,7 @@ export interface OrderListFilters {
   dateFrom?: string;
   dateTo?: string;
   orderStatus?: string;
+  confirmationStatus?: ConfirmationStatus | "";
   search?: string;
 }
 
@@ -79,4 +86,16 @@ export interface OrderStockDeduction {
 export interface OrderDeleteResult {
   ok: boolean;
   error: string | null;
+}
+
+export interface BulkOrderDeleteResult {
+  ok: boolean;
+  deleted: number;
+  restoredOrders: number;
+  error: string | null;
+}
+
+export interface BulkStockDeductionSummary {
+  totalSelected: number;
+  ordersWithDeductions: number;
 }

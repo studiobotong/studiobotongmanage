@@ -265,13 +265,44 @@ export default function OrderUploadClient() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-emerald-50 px-4 py-3">
-                    <p className="text-xs text-emerald-600">신규 저장</p>
-                    <p className="text-2xl font-bold text-emerald-700">
-                      {result.inserted}
-                      <span className="ml-1 text-sm font-medium">건</span>
-                    </p>
-                  </div>
+                  {result.insertedProvisional > 0 && (
+                    <div className="rounded-xl bg-orange-50 px-4 py-3">
+                      <p className="text-xs text-orange-600">신규 가입력</p>
+                      <p className="text-2xl font-bold text-orange-700">
+                        {result.insertedProvisional}
+                        <span className="ml-1 text-sm font-medium">건</span>
+                      </p>
+                    </div>
+                  )}
+                  {result.upgradedToConfirmed > 0 && (
+                    <div className="rounded-xl bg-indigo-50 px-4 py-3">
+                      <p className="text-xs text-indigo-600">가입력→확정 전환</p>
+                      <p className="text-2xl font-bold text-indigo-700">
+                        {result.upgradedToConfirmed}
+                        <span className="ml-1 text-sm font-medium">건</span>
+                      </p>
+                    </div>
+                  )}
+                  {result.insertedConfirmed > 0 && (
+                    <div className="rounded-xl bg-blue-50 px-4 py-3">
+                      <p className="text-xs text-blue-600">신규 확정</p>
+                      <p className="text-2xl font-bold text-blue-700">
+                        {result.insertedConfirmed}
+                        <span className="ml-1 text-sm font-medium">건</span>
+                      </p>
+                    </div>
+                  )}
+                  {result.inserted > 0 &&
+                    result.insertedProvisional === 0 &&
+                    result.insertedConfirmed === 0 && (
+                      <div className="rounded-xl bg-emerald-50 px-4 py-3">
+                        <p className="text-xs text-emerald-600">신규 저장</p>
+                        <p className="text-2xl font-bold text-emerald-700">
+                          {result.inserted}
+                          <span className="ml-1 text-sm font-medium">건</span>
+                        </p>
+                      </div>
+                    )}
                   <div className="rounded-xl bg-gray-50 px-4 py-3">
                     <p className="text-xs text-gray-500">중복 스킵</p>
                     <p className="text-2xl font-bold text-gray-700">
@@ -286,9 +317,9 @@ export default function OrderUploadClient() {
                       <span className="ml-1 text-sm font-medium">건</span>
                     </p>
                   </div>
-                  <div className="rounded-xl bg-blue-50 px-4 py-3">
-                    <p className="text-xs text-blue-600">처리</p>
-                    <p className="text-lg font-bold text-blue-700">
+                  <div className="rounded-xl bg-slate-50 px-4 py-3">
+                    <p className="text-xs text-slate-600">처리</p>
+                    <p className="text-lg font-bold text-slate-700">
                       {result.totalRows}행 / {formatMs(result.elapsedMs)}
                     </p>
                   </div>

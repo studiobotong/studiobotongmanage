@@ -1,7 +1,11 @@
 import { supabase } from "./supabaseClient";
 import { isAutoDeductStockEnabled } from "./settings";
+import type { OrderExcelFormat } from "./orderParser";
 import type {
   BotongOrder,
+  BulkOrderDeleteResult,
+  BulkStockDeductionSummary,
+  ConfirmationStatus,
   OrderDeleteResult,
   OrderListFilters,
   OrderStockDeduction,
@@ -16,6 +20,10 @@ function toNum(v: unknown): number {
 }
 
 function mapOrderRow(r: Record<string, unknown>): BotongOrder {
+  const rawStatus = String(r.confirmation_status ?? "provisional");
+  const confirmation_status: ConfirmationStatus =
+    rawStatus === "confirmed" ? "confirmed" : "provisional";
+
   return {
     id: String(r.id ?? ""),
     product_order_no: String(r.product_order_no ?? ""),
@@ -38,6 +46,7 @@ function mapOrderRow(r: Record<string, unknown>): BotongOrder {
     channel: String(r.channel ?? ""),
     buyer_id_masked:
       r.buyer_id_masked != null ? String(r.buyer_id_masked) : null,
+    confirmation_status,
     raw_row: (r.raw_row as Record<string, unknown>) ?? {},
     created_at: String(r.created_at ?? ""),
     updated_at: String(r.updated_at ?? ""),
@@ -75,6 +84,35 @@ async function findProductId(
 
   if (error || !data) return null;
   return String(data.id);
+}
+
+function buildOrderPayload(
+  row: ParsedOrderRow,
+  productId: string | null,
+  confirmationStatus: ConfirmationStatus
+) {
+  return {
+    product_order_no: row.product_order_no,
+    order_no: row.order_no,
+    order_date: row.order_date,
+    product_name: row.product_name,
+    option_name: row.option_name,
+    product_id: productId,
+    quantity: row.quantity,
+    product_price: row.product_price,
+    total_order_amount: row.total_order_amount,
+    shipping_fee: row.shipping_fee,
+    naver_fee: row.naver_fee,
+    channel_fee: row.channel_fee,
+    settlement_amount: row.settlement_amount,
+    order_status: row.order_status,
+    order_status_detail: row.order_status_detail,
+    payment_method: row.payment_method,
+    channel: row.channel,
+    buyer_id_masked: row.buyer_id_masked,
+    confirmation_status: confirmationStatus,
+    raw_row: row.raw_row,
+  };
 }
 
 async function deductStock(
@@ -117,12 +155,16 @@ async function deductStock(
 
 export async function processOrderUpload(
   rows: ParsedOrderRow[],
-  options: { applyStock?: boolean } = {}
+  options: { applyStock?: boolean; format?: OrderExcelFormat | null } = {}
 ): Promise<OrderUploadResult> {
   const applyStock = options.applyStock !== false;
+  const format = options.format ?? "fulfillment";
   const started = Date.now();
   const result: OrderUploadResult = {
     inserted: 0,
+    insertedProvisional: 0,
+    insertedConfirmed: 0,
+    upgradedToConfirmed: 0,
     skipped: 0,
     unmatched: 0,
     unmatchedProducts: [],
@@ -145,7 +187,7 @@ export async function processOrderUpload(
 
     const { data: existing, error: existingError } = await supabase
       .from("botong_orders")
-      .select("id")
+      .select("id, confirmation_status")
       .eq("product_order_no", row.product_order_no)
       .maybeSingle();
 
@@ -156,38 +198,89 @@ export async function processOrderUpload(
       continue;
     }
 
+    const productId = await findProductId(row.product_name, row.option_name);
+
+    if (format === "purchase_confirmation") {
+      if (existing) {
+        const status = String(existing.confirmation_status ?? "provisional");
+        if (status === "confirmed") {
+          result.skipped += 1;
+          continue;
+        }
+
+        if (status === "provisional") {
+          const updatePayload = buildOrderPayload(row, productId, "confirmed");
+          const { error: updateError } = await supabase
+            .from("botong_orders")
+            .update(updatePayload)
+            .eq("id", existing.id);
+
+          if (updateError) {
+            result.errors.push(
+              `${row.product_order_no}: 확정 업데이트 실패 — ${updateError.message}`
+            );
+            continue;
+          }
+
+          result.upgradedToConfirmed += 1;
+          continue;
+        }
+      }
+
+      if (!productId) {
+        result.unmatched += 1;
+        bumpUnmatched(unmatchedMap, row.product_name, row.option_name);
+      }
+
+      const { error: insertError } = await supabase
+        .from("botong_orders")
+        .insert(buildOrderPayload(row, productId, "confirmed"));
+
+      if (insertError) {
+        result.errors.push(
+          `${row.product_order_no}: 저장 실패 — ${insertError.message}`
+        );
+        continue;
+      }
+
+      result.inserted += 1;
+      result.insertedConfirmed += 1;
+
+      if (
+        autoDeduct &&
+        productId &&
+        row.quantity > 0 &&
+        !isCancelledStatus(row.order_status)
+      ) {
+        const stockError = await deductStock(
+          productId,
+          row.quantity,
+          row.product_order_no
+        );
+        if (stockError) {
+          result.errors.push(
+            `${row.product_order_no}: 재고 차감 실패 — ${stockError}`
+          );
+        }
+      }
+
+      continue;
+    }
+
+    // fulfillment (발주발송관리) upload
     if (existing) {
       result.skipped += 1;
       continue;
     }
 
-    const productId = await findProductId(row.product_name, row.option_name);
     if (!productId) {
       result.unmatched += 1;
       bumpUnmatched(unmatchedMap, row.product_name, row.option_name);
     }
 
-    const { error: insertError } = await supabase.from("botong_orders").insert({
-      product_order_no: row.product_order_no,
-      order_no: row.order_no,
-      order_date: row.order_date,
-      product_name: row.product_name,
-      option_name: row.option_name,
-      product_id: productId,
-      quantity: row.quantity,
-      product_price: row.product_price,
-      total_order_amount: row.total_order_amount,
-      shipping_fee: row.shipping_fee,
-      naver_fee: row.naver_fee,
-      channel_fee: row.channel_fee,
-      settlement_amount: row.settlement_amount,
-      order_status: row.order_status,
-      order_status_detail: row.order_status_detail,
-      payment_method: row.payment_method,
-      channel: row.channel,
-      buyer_id_masked: row.buyer_id_masked,
-      raw_row: row.raw_row,
-    });
+    const { error: insertError } = await supabase
+      .from("botong_orders")
+      .insert(buildOrderPayload(row, productId, "provisional"));
 
     if (insertError) {
       result.errors.push(
@@ -197,6 +290,7 @@ export async function processOrderUpload(
     }
 
     result.inserted += 1;
+    result.insertedProvisional += 1;
 
     if (
       autoDeduct &&
@@ -228,7 +322,7 @@ export async function getOrders(
   let query = supabase
     .from("botong_orders")
     .select(
-      "id, product_order_no, order_no, order_date, product_name, option_name, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, raw_row, created_at, updated_at"
+      "id, product_order_no, order_no, order_date, product_name, option_name, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at"
     )
     .order("order_date", { ascending: false });
 
@@ -240,6 +334,9 @@ export async function getOrders(
   }
   if (filters.orderStatus) {
     query = query.eq("order_status", filters.orderStatus);
+  }
+  if (filters.confirmationStatus) {
+    query = query.eq("confirmation_status", filters.confirmationStatus);
   }
   if (filters.search?.trim()) {
     query = query.ilike("product_name", `%${filters.search.trim()}%`);
@@ -269,42 +366,133 @@ export async function getDistinctOrderStatuses(): Promise<string[]> {
   return Array.from(statuses).sort();
 }
 
+function isFetchFailure(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("failed to fetch") || lower.includes("fetch failed");
+}
+
 export async function getOrderStockDeductions(
   productOrderNo: string
 ): Promise<OrderStockDeduction[]> {
-  const { data, error } = await supabase
-    .from("botong_stock_movements")
-    .select(
-      "product_id, quantity_change, botong_products ( product_name, option_name )"
-    )
-    .eq("related_order_no", productOrderNo)
-    .eq("movement_type", "order_out");
+  const orderNo = productOrderNo.trim();
+  if (!orderNo) return [];
 
-  if (error) {
-    console.error("[orders] getOrderStockDeductions 오류:", error.message);
+  try {
+    const { data: movements, error: movementError } = await supabase
+      .from("botong_stock_movements")
+      .select("product_id, quantity_change")
+      .eq("related_order_no", orderNo)
+      .eq("movement_type", "order_out");
+
+    if (movementError) {
+      if (!isFetchFailure(movementError.message)) {
+        console.error(
+          "[orders] getOrderStockDeductions 오류:",
+          movementError.message
+        );
+      }
+      return [];
+    }
+
+    const productIds = [
+      ...new Set(
+        (movements ?? [])
+          .map((row) => String(row.product_id ?? "").trim())
+          .filter(Boolean)
+      ),
+    ];
+
+    const productMap = new Map<
+      string,
+      { product_name: string; option_name: string }
+    >();
+
+    if (productIds.length > 0) {
+      const { data: products, error: productError } = await supabase
+        .from("botong_products")
+        .select("id, product_name, option_name")
+        .in("id", productIds);
+
+      if (productError) {
+        if (!isFetchFailure(productError.message)) {
+          console.error(
+            "[orders] getOrderStockDeductions 상품 조회 오류:",
+            productError.message
+          );
+        }
+      } else {
+        for (const product of products ?? []) {
+          productMap.set(String(product.id ?? ""), {
+            product_name: String(product.product_name ?? "알 수 없는 상품"),
+            option_name: String(product.option_name ?? ""),
+          });
+        }
+      }
+    }
+
+    const deductions: OrderStockDeduction[] = [];
+    for (const row of movements ?? []) {
+      const qty = Math.abs(toNum(row.quantity_change));
+      if (qty <= 0) continue;
+
+      const productId = String(row.product_id ?? "");
+      const productInfo = productMap.get(productId);
+
+      deductions.push({
+        product_id: productId,
+        product_name: productInfo?.product_name ?? "알 수 없는 상품",
+        option_name: productInfo?.option_name ?? "",
+        quantity: qty,
+      });
+    }
+
+    return deductions;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!isFetchFailure(message)) {
+      console.error("[orders] getOrderStockDeductions 오류:", message);
+    }
     return [];
   }
+}
 
-  const deductions: OrderStockDeduction[] = [];
-  for (const row of data ?? []) {
-    const qty = Math.abs(toNum(row.quantity_change));
-    if (qty <= 0) continue;
-
-    const product = row.botong_products as
-      | { product_name?: string; option_name?: string }
-      | { product_name?: string; option_name?: string }[]
-      | null;
-    const productInfo = Array.isArray(product) ? product[0] : product;
-
-    deductions.push({
-      product_id: String(row.product_id ?? ""),
-      product_name: String(productInfo?.product_name ?? "알 수 없는 상품"),
-      option_name: String(productInfo?.option_name ?? ""),
-      quantity: qty,
-    });
+export async function getBulkStockDeductionSummary(
+  productOrderNos: string[]
+): Promise<BulkStockDeductionSummary> {
+  const unique = [...new Set(productOrderNos.map((n) => n.trim()).filter(Boolean))];
+  if (unique.length === 0) {
+    return { totalSelected: 0, ordersWithDeductions: 0 };
   }
 
-  return deductions;
+  const ordersWithDeductions = new Set<string>();
+  const batchSize = 100;
+
+  for (let i = 0; i < unique.length; i += batchSize) {
+    const batch = unique.slice(i, i + batchSize);
+    const { data, error } = await supabase
+      .from("botong_stock_movements")
+      .select("related_order_no")
+      .eq("movement_type", "order_out")
+      .in("related_order_no", batch);
+
+    if (error) {
+      console.error(
+        "[orders] getBulkStockDeductionSummary 오류:",
+        error.message
+      );
+      continue;
+    }
+
+    for (const row of data ?? []) {
+      const orderNo = String(row.related_order_no ?? "").trim();
+      if (orderNo) ordersWithDeductions.add(orderNo);
+    }
+  }
+
+  return {
+    totalSelected: unique.length,
+    ordersWithDeductions: ordersWithDeductions.size,
+  };
 }
 
 async function restoreStockForOrder(
@@ -389,4 +577,74 @@ export async function deleteOrder(
   }
 
   return { ok: true, error: null };
+}
+
+export async function deleteOrdersBulk(
+  orderIds: string[],
+  options: { restoreStock: boolean }
+): Promise<BulkOrderDeleteResult> {
+  const ids = [...new Set(orderIds.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) {
+    return { ok: false, deleted: 0, restoredOrders: 0, error: "삭제할 주문이 없습니다." };
+  }
+
+  let deleted = 0;
+  let restoredOrders = 0;
+
+  for (const orderId of ids) {
+    const { data: order, error: fetchError } = await supabase
+      .from("botong_orders")
+      .select("id, product_order_no")
+      .eq("id", orderId)
+      .maybeSingle();
+
+    if (fetchError) {
+      return {
+        ok: false,
+        deleted,
+        restoredOrders,
+        error: `주문 조회 실패 — ${fetchError.message}`,
+      };
+    }
+    if (!order) continue;
+
+    const productOrderNo = String(order.product_order_no ?? "");
+
+    if (options.restoreStock) {
+      const deductions = await getOrderStockDeductions(productOrderNo);
+      if (deductions.length > 0) {
+        const restoreError = await restoreStockForOrder(
+          productOrderNo,
+          deductions
+        );
+        if (restoreError) {
+          return {
+            ok: false,
+            deleted,
+            restoredOrders,
+            error: `재고 복구 실패 (${productOrderNo}) — ${restoreError}`,
+          };
+        }
+        restoredOrders += 1;
+      }
+    }
+
+    const { error: deleteError } = await supabase
+      .from("botong_orders")
+      .delete()
+      .eq("id", orderId);
+
+    if (deleteError) {
+      return {
+        ok: false,
+        deleted,
+        restoredOrders,
+        error: `주문 삭제 실패 — ${deleteError.message}`,
+      };
+    }
+
+    deleted += 1;
+  }
+
+  return { ok: true, deleted, restoredOrders, error: null };
 }

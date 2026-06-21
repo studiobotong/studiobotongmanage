@@ -2,50 +2,40 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
-import type { BotongOrder, OrderStockDeduction } from "@/types/orders";
-
-function formatProductLabel(d: OrderStockDeduction): string {
-  if (d.option_name) {
-    return `${d.product_name} (${d.option_name})`;
-  }
-  return d.product_name;
-}
+import type { BulkStockDeductionSummary } from "@/types/orders";
 
 function isAbortError(e: unknown): boolean {
   return e instanceof DOMException && e.name === "AbortError";
 }
 
-interface OrderDeleteModalProps {
+interface OrderBulkDeleteModalProps {
   open: boolean;
-  order: BotongOrder;
+  selectedCount: number;
+  productOrderNos: string[];
   deleting: boolean;
   onConfirm: (restoreStock: boolean) => void;
   onCancel: () => void;
 }
 
-export default function OrderDeleteModal({
+export default function OrderBulkDeleteModal({
   open,
-  order,
+  selectedCount,
+  productOrderNos,
   deleting,
   onConfirm,
   onCancel,
-}: OrderDeleteModalProps) {
+}: OrderBulkDeleteModalProps) {
   const [loading, setLoading] = useState(true);
-  const [deductions, setDeductions] = useState<OrderStockDeduction[]>([]);
+  const [summary, setSummary] = useState<BulkStockDeductionSummary | null>(
+    null
+  );
   const [restoreStock, setRestoreStock] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setLoading(true);
-      setDeductions([]);
+      setSummary(null);
       setRestoreStock(false);
-      return;
-    }
-
-    const productOrderNo = order.product_order_no?.trim();
-    if (!productOrderNo) {
-      setLoading(false);
-      setDeductions([]);
       return;
     }
 
@@ -55,21 +45,23 @@ export default function OrderDeleteModal({
     async function load() {
       setLoading(true);
       try {
-        const res = await fetch(
-          `/api/orders/stock-deductions?productOrderNo=${encodeURIComponent(productOrderNo)}`,
-          { signal: controller.signal }
-        );
+        const res = await fetch("/api/orders/stock-deductions/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ productOrderNos }),
+          signal: controller.signal,
+        });
         const json = (await res.json()) as {
           ok?: boolean;
-          deductions?: OrderStockDeduction[];
+          summary?: BulkStockDeductionSummary;
         };
 
         if (!cancelled) {
-          setDeductions(json.ok ? (json.deductions ?? []) : []);
+          setSummary(json.ok ? (json.summary ?? null) : null);
         }
       } catch (e) {
         if (!cancelled && !isAbortError(e)) {
-          setDeductions([]);
+          setSummary(null);
         }
       } finally {
         if (!cancelled) {
@@ -83,18 +75,19 @@ export default function OrderDeleteModal({
       cancelled = true;
       controller.abort();
     };
-  }, [open, order.product_order_no]);
-
-  const hasDeductions = deductions.length > 0;
+  }, [open, productOrderNos]);
 
   if (!open) return null;
+
+  const ordersWithDeductions = summary?.ordersWithDeductions ?? 0;
+  const hasDeductions = ordersWithDeductions > 0;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="order-delete-title"
+      aria-labelledby="bulk-delete-title"
     >
       <div className="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-start gap-3">
@@ -103,10 +96,10 @@ export default function OrderDeleteModal({
           </div>
           <div>
             <h3
-              id="order-delete-title"
+              id="bulk-delete-title"
               className="text-sm font-bold text-gray-800"
             >
-              주문 삭제
+              선택 항목 일괄 삭제
             </h3>
             <p className="mt-0.5 text-xs text-gray-400">
               이 작업은 되돌릴 수 없습니다
@@ -115,16 +108,9 @@ export default function OrderDeleteModal({
         </div>
 
         <p className="mb-4 text-sm text-gray-600">
-          이 주문을 삭제하시겠습니까?
+          선택한 <span className="font-semibold">{selectedCount}건</span>의
+          주문을 삭제하시겠습니까?
         </p>
-
-        <div className="mb-4 rounded-xl bg-gray-50 px-3 py-2.5 text-xs text-gray-500">
-          <p className="font-medium text-gray-700">{order.product_name}</p>
-          {order.option_name && <p className="mt-0.5">{order.option_name}</p>}
-          <p className="mt-1 text-gray-400">
-            상품주문번호 {order.product_order_no}
-          </p>
-        </div>
 
         {loading ? (
           <div className="mb-6 flex items-center gap-2 text-sm text-gray-400">
@@ -135,16 +121,9 @@ export default function OrderDeleteModal({
           <div className="mb-6 space-y-3">
             <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5">
               <p className="text-xs font-medium text-amber-700">
-                이 주문으로 재고가 차감된 기록이 있습니다
+                선택한 {selectedCount}건 중 {ordersWithDeductions}건이 재고를
+                차감했습니다
               </p>
-              <ul className="mt-2 space-y-1">
-                {deductions.map((d) => (
-                  <li key={d.product_id} className="text-xs text-amber-800">
-                    {formatProductLabel(d)} {d.quantity}개가 이 주문으로
-                    차감되었습니다
-                  </li>
-                ))}
-              </ul>
             </div>
             <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-gray-200 px-3 py-2.5 hover:bg-gray-50">
               <input
@@ -155,15 +134,17 @@ export default function OrderDeleteModal({
                 className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#5b6af4] focus:ring-[#5b6af4]/20"
               />
               <span className="text-sm text-gray-700">
-                재고 되돌리기
+                재고를 모두 되돌릴까요?
                 <span className="mt-0.5 block text-xs text-gray-400">
-                  선택 시 차감된 수량만큼 현재 재고에 다시 더합니다
+                  선택 시 재고 차감 이력이 있는 주문마다 차감 수량을 복구합니다
                 </span>
               </span>
             </label>
           </div>
         ) : (
-          <div className="mb-6" />
+          <div className="mb-6 rounded-xl bg-gray-50 px-3 py-2.5 text-xs text-gray-500">
+            선택한 주문 중 재고 차감 이력이 있는 건이 없습니다.
+          </div>
         )}
 
         <div className="flex gap-2">
@@ -182,7 +163,7 @@ export default function OrderDeleteModal({
             className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-500 px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-red-600 disabled:opacity-50"
           >
             {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
-            삭제
+            {selectedCount}건 삭제
           </button>
         </div>
       </div>
