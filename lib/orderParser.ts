@@ -162,6 +162,7 @@ function mapRow(record: Record<string, unknown>): ParsedOrderRow | null {
   if (!productOrderNo) return null;
 
   const optionRaw = toStr(record["옵션정보"]);
+  const optionSkuCode = toStr(record["옵션관리코드"]) || null;
   const orderDate =
     parseDateTime(record["주문일시"]) ??
     parseDateTime(record["결제일"]) ??
@@ -175,6 +176,7 @@ function mapRow(record: Record<string, unknown>): ParsedOrderRow | null {
     product_name: toStr(record["상품명"]),
     option_name: optionRaw,
     naver_product_no: normalizeProductNo(record["상품번호"]),
+    option_sku_code: optionSkuCode,
     quantity: parseNumber(record["수량"]),
     product_price: parseNumber(record["상품가격"]),
     total_order_amount: parseNumber(record["최종 상품별 총 주문금액"]),

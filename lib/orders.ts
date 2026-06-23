@@ -1,5 +1,6 @@
 import { supabase } from "./supabaseClient";
 import { isAutoDeductStockEnabled } from "./settings";
+import { findOptionBySkuCode } from "./productOptions";
 import type { OrderExcelFormat } from "./orderParser";
 import type {
   BotongOrder,
@@ -18,7 +19,7 @@ import type {
 const ORDER_LIST_PAGE_SIZE = 50;
 
 const ORDER_LIST_COLUMNS =
-  "id, product_order_no, order_no, order_date, product_name, option_name, naver_product_no, product_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at";
+  "id, product_order_no, order_no, order_date, product_name, option_name, naver_product_no, product_id, option_id, quantity, product_price, total_order_amount, shipping_fee, naver_fee, channel_fee, settlement_amount, order_status, order_status_detail, payment_method, channel, buyer_id_masked, confirmation_status, raw_row, created_at, updated_at";
 
 function toNum(v: unknown): number {
   const n = Number(v);
@@ -40,6 +41,7 @@ function mapOrderRow(r: Record<string, unknown>): BotongOrder {
     naver_product_no:
       r.naver_product_no != null ? String(r.naver_product_no) : null,
     product_id: r.product_id != null ? String(r.product_id) : null,
+    option_id: r.option_id != null ? String(r.option_id) : null,
     quantity: toNum(r.quantity),
     product_price: toNum(r.product_price),
     total_order_amount: toNum(r.total_order_amount),
@@ -123,9 +125,40 @@ async function findProductId(
   return findProductIdByNameAndOption(productName, optionName);
 }
 
+interface ProductMatchResult {
+  productId: string | null;
+  optionId: string | null;
+}
+
+async function findProductAndOption(
+  productName: string,
+  optionName: string,
+  naverProductNo: string | null,
+  optionSkuCode: string | null
+): Promise<ProductMatchResult> {
+  if (optionSkuCode?.trim()) {
+    const matched = await findOptionBySkuCode(optionSkuCode);
+    if (matched) {
+      return {
+        productId: matched.product_id,
+        optionId: matched.id,
+      };
+    }
+  }
+
+  const productId = await findProductId(
+    productName,
+    optionName,
+    naverProductNo
+  );
+
+  return { productId, optionId: null };
+}
+
 function buildOrderPayload(
   row: ParsedOrderRow,
   productId: string | null,
+  optionId: string | null,
   confirmationStatus: ConfirmationStatus
 ) {
   return {
@@ -136,6 +169,7 @@ function buildOrderPayload(
     option_name: row.option_name,
     naver_product_no: row.naver_product_no,
     product_id: productId,
+    option_id: optionId,
     quantity: row.quantity,
     product_price: row.product_price,
     total_order_amount: row.total_order_amount,
@@ -236,10 +270,11 @@ export async function processOrderUpload(
       continue;
     }
 
-    const productId = await findProductId(
+    const { productId, optionId } = await findProductAndOption(
       row.product_name,
       row.option_name,
-      row.naver_product_no
+      row.naver_product_no,
+      row.option_sku_code
     );
 
     if (format === "purchase_confirmation") {
@@ -251,7 +286,7 @@ export async function processOrderUpload(
         }
 
         if (status === "provisional") {
-          const updatePayload = buildOrderPayload(row, productId, "confirmed");
+          const updatePayload = buildOrderPayload(row, productId, optionId, "confirmed");
           const { error: updateError } = await supabase
             .from("botong_orders")
             .update(updatePayload)
@@ -276,7 +311,7 @@ export async function processOrderUpload(
 
       const { error: insertError } = await supabase
         .from("botong_orders")
-        .insert(buildOrderPayload(row, productId, "confirmed"));
+        .insert(buildOrderPayload(row, productId, optionId, "confirmed"));
 
       if (insertError) {
         result.errors.push(
@@ -322,7 +357,7 @@ export async function processOrderUpload(
 
     const { error: insertError } = await supabase
       .from("botong_orders")
-      .insert(buildOrderPayload(row, productId, "provisional"));
+      .insert(buildOrderPayload(row, productId, optionId, "provisional"));
 
     if (insertError) {
       result.errors.push(

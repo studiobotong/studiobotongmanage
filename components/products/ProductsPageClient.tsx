@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import {
   Upload,
   Plus,
@@ -12,12 +12,15 @@ import {
   ArrowUpDown,
   Check,
   AlertCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import clsx from "clsx";
 import Header from "@/components/Header";
 import PageHeader from "@/components/PageHeader";
 import Button from "@/components/Button";
 import { parseProductCsv } from "@/lib/productParser";
+import { parseOptionCostExcel } from "@/lib/productOptionParser";
 import {
   getProducts,
   createProduct,
@@ -25,7 +28,9 @@ import {
   deleteProduct,
   upsertProductsFromCsv,
 } from "@/lib/products";
+import { upsertOptionsFromExcel } from "@/lib/productOptions";
 import { normalizeNaverImageUrl } from "@/lib/utils/imageUrl";
+import ProductOptionsPanel from "@/components/products/ProductOptionsPanel";
 import type { BotongProduct, ProductFormData } from "@/types/products";
 
 type SortMode = "stock" | "name";
@@ -92,6 +97,10 @@ export default function ProductsPageClient() {
   const [sortMode, setSortMode] = useState<SortMode>("stock");
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<string | null>(null);
+  const [optionUploading, setOptionUploading] = useState(false);
+  const [optionUploadResult, setOptionUploadResult] = useState<string | null>(null);
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [optionsRefreshKey, setOptionsRefreshKey] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<BotongProduct | null>(null);
   const [form, setForm] = useState<ProductFormData>(EMPTY_FORM);
@@ -103,6 +112,7 @@ export default function ProductsPageClient() {
   } | null>(null);
   const [inlineValue, setInlineValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const optionFileInputRef = useRef<HTMLInputElement>(null);
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
@@ -154,6 +164,42 @@ export default function ProductsPageClient() {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleOptionExcelUpload = async (file: File) => {
+    setOptionUploading(true);
+    setOptionUploadResult(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const { rows, errors: parseErrors } = parseOptionCostExcel(buffer);
+
+      if (rows.length === 0) {
+        setOptionUploadResult(
+          parseErrors.length > 0
+            ? `오류: ${parseErrors.join(" / ")}`
+            : "파싱된 옵션 데이터가 없습니다."
+        );
+        return;
+      }
+
+      const result = await upsertOptionsFromExcel(rows);
+      setOptionUploadResult(
+        `등록 성공 ${result.inserted}건 / 업데이트 ${result.updated}건 / 스킵 ${result.skipped}건` +
+          (parseErrors.length > 0 ? `\n${parseErrors.join("\n")}` : "")
+      );
+      setOptionsRefreshKey((k) => k + 1);
+    } catch (e) {
+      setOptionUploadResult(
+        `업로드 실패: ${e instanceof Error ? e.message : "알 수 없는 오류"}`
+      );
+    } finally {
+      setOptionUploading(false);
+      if (optionFileInputRef.current) optionFileInputRef.current.value = "";
+    }
+  };
+
+  const toggleExpand = (productId: string) => {
+    setExpandedProductId((prev) => (prev === productId ? null : productId));
   };
 
   const openAddModal = () => {
@@ -281,6 +327,26 @@ export default function ProductsPageClient() {
                   if (file) handleCsvUpload(file);
                 }}
               />
+              <input
+                ref={optionFileInputRef}
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleOptionExcelUpload(file);
+                }}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={optionUploading ? Loader2 : Upload}
+                onClick={() => optionFileInputRef.current?.click()}
+                disabled={optionUploading}
+                className={optionUploading ? "[&_svg]:animate-spin" : ""}
+              >
+                옵션 Excel 업로드
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"
@@ -308,6 +374,20 @@ export default function ProductsPageClient() {
             )}
           >
             {uploadResult}
+          </div>
+        )}
+
+        {optionUploadResult && (
+          <div
+            className={clsx(
+              "mb-6 rounded-xl border px-4 py-3 text-sm whitespace-pre-line",
+              optionUploadResult.includes("오류") ||
+                optionUploadResult.startsWith("업로드 실패")
+                ? "border-red-100 bg-red-50 text-red-700"
+                : "border-emerald-100 bg-emerald-50 text-emerald-800"
+            )}
+          >
+            {optionUploadResult}
           </div>
         )}
 
@@ -349,6 +429,7 @@ export default function ProductsPageClient() {
               <table className="w-full min-w-[960px] table-fixed">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50/80">
+                    <th className="w-8 px-2 py-3" />
                     <th className="w-16 px-4 py-3 text-left text-xs font-medium text-gray-400">
                       이미지
                     </th>
@@ -381,15 +462,25 @@ export default function ProductsPageClient() {
                 <tbody>
                   {filtered.map((product) => {
                     const lowStock = product.stock_qty <= product.safety_stock;
+                    const isExpanded = expandedProductId === product.id;
                     return (
+                      <Fragment key={product.id}>
                       <tr
-                        key={product.id}
+                        onClick={() => toggleExpand(product.id)}
                         className={clsx(
-                          "border-b border-gray-100 transition-colors hover:bg-gray-50/70",
-                          lowStock && "bg-orange-50/60 hover:bg-orange-50"
+                          "cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50/70",
+                          lowStock && "bg-orange-50/60 hover:bg-orange-50",
+                          isExpanded && "bg-blue-50/30"
                         )}
                       >
-                        <td className="px-4 py-3">
+                        <td className="px-2 py-3 text-center">
+                          {isExpanded ? (
+                            <ChevronDown className="mx-auto h-4 w-4 text-gray-400" />
+                          ) : (
+                            <ChevronRight className="mx-auto h-4 w-4 text-gray-400" />
+                          )}
+                        </td>
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                           {product.image_url ? (
                             <ProductThumbnail url={product.image_url} />
                           ) : (
@@ -417,13 +508,20 @@ export default function ProductsPageClient() {
                         <td
                           className="max-w-[140px] truncate px-4 py-3 text-xs text-gray-500"
                           title={product.category || undefined}
+                          onClick={(e) => e.stopPropagation()}
                         >
                           {product.category || "—"}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-sm tabular-nums text-gray-800">
+                        <td
+                          className="whitespace-nowrap px-4 py-3 text-right text-sm tabular-nums text-gray-800"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {formatKrw(product.selling_price)}원
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <td
+                          className="whitespace-nowrap px-4 py-3 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {editingField?.id === product.id &&
                           editingField.field === "cost_price" ? (
                             <input
@@ -454,10 +552,14 @@ export default function ProductsPageClient() {
                             "whitespace-nowrap px-4 py-3 text-right text-sm tabular-nums",
                             lowStock ? "font-semibold text-orange-600" : "text-gray-700"
                           )}
+                          onClick={(e) => e.stopPropagation()}
                         >
                           {formatKrw(product.stock_qty)}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <td
+                          className="whitespace-nowrap px-4 py-3 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {editingField?.id === product.id &&
                           editingField.field === "safety_stock" ? (
                             <input
@@ -483,7 +585,10 @@ export default function ProductsPageClient() {
                             </button>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td
+                          className="px-4 py-3 text-center"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <span
                             className={clsx(
                               "inline-block rounded-lg px-2.5 py-1 text-xs font-medium",
@@ -495,7 +600,7 @@ export default function ProductsPageClient() {
                             {product.is_active ? "판매중" : "판매중지"}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-center gap-1">
                             <Button
                               variant="ghost"
@@ -517,6 +622,17 @@ export default function ProductsPageClient() {
                           </div>
                         </td>
                       </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={10} className="p-0">
+                            <ProductOptionsPanel
+                              key={`${product.id}-${optionsRefreshKey}`}
+                              productId={product.id}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
