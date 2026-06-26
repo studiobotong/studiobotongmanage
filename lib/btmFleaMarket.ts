@@ -165,3 +165,46 @@ export async function deleteSale(id: number): Promise<void> {
     .eq("id", id);
   if (error) throw error;
 }
+
+/** 판매 내역이 있는 날짜 목록 조회 */
+export async function getSessionDates(): Promise<{ id: number; date: string }[]> {
+  const { data, error } = await btmSupabase
+    .from("btm_flea_market_sessions")
+    .select("id, date")
+    .order("date", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as { id: number; date: string }[];
+}
+
+/** 특정 날짜의 session 조회 (없으면 null) */
+export async function getSessionByDate(date: string): Promise<FleaMarketSession | null> {
+  const { data, error } = await btmSupabase
+    .from("btm_flea_market_sessions")
+    .select("*")
+    .eq("date", date)
+    .maybeSingle();
+  if (error) throw error;
+  return data as FleaMarketSession | null;
+}
+
+/** 판매 내역 수정 */
+export async function updateSale(
+  id: number,
+  params: {
+    itemName: string;
+    price: number;
+    isCard: boolean;
+    memo?: string;
+  }
+): Promise<void> {
+  const { error } = await btmSupabase
+    .from("btm_flea_market_sales")
+    .update({
+      item_name: params.itemName,
+      price: params.price,
+      is_card: params.isCard,
+      memo: params.memo ?? null,
+    })
+    .eq("id", id);
+  if (error) throw error;
+}
