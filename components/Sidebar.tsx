@@ -13,6 +13,8 @@ import {
   Sparkles,
   ClipboardList,
   Landmark,
+  Receipt,
+  ShoppingBag,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { logout } from "@/app/actions/auth";
@@ -52,6 +54,16 @@ const navItems = [
     label: "Settings",
     href: "/settings",
     icon: Settings,
+  },
+  {
+    label: "정산내역",
+    href: "/settlements",
+    icon: Receipt,
+  },
+  {
+    label: "플리마켓",
+    href: "/flea-market",
+    icon: ShoppingBag,
   },
   {
     label: "Asset",

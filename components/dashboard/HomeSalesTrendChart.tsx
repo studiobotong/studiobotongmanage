@@ -7,9 +7,9 @@ import SalesTrendChart from "@/components/dashboard/sales/SalesTrendChart";
 import {
   defaultHomeChartFilter,
   formatHomeChartSubtitle,
-  getHomeTrendData,
   homeChartTitle,
 } from "@/lib/dashboardSales";
+import { getBTMTrendData } from "@/lib/btmDashboard";
 import { todayKst } from "@/lib/kstDate";
 import type { DateFilterGranularity, DateFilterValue } from "@/types/dashboardSales";
 import type { SalesBarPoint } from "@/types/dashboardSales";
@@ -38,7 +38,7 @@ export default function HomeSalesTrendChart({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await getHomeTrendData(filter);
+      const result = await getBTMTrendData(filter);
       setData(result);
     } catch (e) {
       console.error("[HomeSalesTrendChart]", e);

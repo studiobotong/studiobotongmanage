@@ -26,6 +26,7 @@ import {
   countDistinctProducts,
 } from "./dashboardSales";
 import { supabase } from "./supabaseClient";
+import { getBTMDashboardHomeData } from "./btmDashboard";
 import type { DashboardData, DashboardHomeData, HomePeriodFilter } from "@/types/dashboard";
 
 export { isExcludedOrderStatus } from "./dashboardOrders";
@@ -98,54 +99,8 @@ function filterOrdersByRange(
 export async function getDashboardHomeData(
   period: HomePeriodFilter
 ): Promise<DashboardHomeData> {
-  const { start, end } = resolveHomePeriodRange(period);
-  const prev = previousPeriodRange(start, end);
-
-  const fetchStart = [start, prev.start].sort()[0]!;
-  const fetchEnd = [end, prev.end].sort().at(-1)!;
-
-  const orders = await fetchOrdersInKstRange(fetchStart, fetchEnd);
-  const currentOrders = filterOrdersByRange(orders, start, end);
-  const previousOrders = filterOrdersByRange(orders, prev.start, prev.end);
-
-  const periodSales = sumSales(currentOrders);
-  const prevSales = sumSales(previousOrders);
-  const orderCount = countRevenueOrders(currentOrders);
-  const prevOrderCount = countRevenueOrders(previousOrders);
-  const productCount = countDistinctProducts(currentOrders);
-  const prevProductCount = countDistinctProducts(previousOrders);
-  const avgOrderAmount = orderCount > 0 ? periodSales / orderCount : 0;
-  const prevAvg = prevOrderCount > 0 ? prevSales / prevOrderCount : 0;
-
-  const [topProducts, reorderProductCount, periodProfit, prevProfit, adSpend, prevAdSpend] =
-    await Promise.all([
-      buildTopProducts(currentOrders),
-      fetchReorderProductCount(),
-      calcProfitForOrders(currentOrders),
-      calcProfitForOrders(previousOrders),
-      sumAdSpendInRange(start, end),
-      sumAdSpendInRange(prev.start, prev.end),
-    ]);
-
-  return {
-    periodLabel: formatHomePeriodLabel(period),
-    kpi: {
-      periodSales,
-      periodSalesChangePct: calcChangePct(periodSales, prevSales),
-      periodProfit,
-      periodProfitChangePct: calcChangePct(periodProfit, prevProfit),
-      orderCount,
-      orderCountChangePct: calcChangePct(orderCount, prevOrderCount),
-      productCount,
-      productCountDelta: productCount - prevProductCount,
-      avgOrderAmount,
-      avgOrderChangePct: calcChangePct(avgOrderAmount, prevAvg),
-      adSpend,
-      adSpendChangePct: calcChangePct(adSpend, prevAdSpend),
-      reorderProductCount,
-    },
-    topProducts,
-  };
+  // BTM 정산 데이터 기반으로 전환 (btm_settlements)
+  return getBTMDashboardHomeData(period);
 }
 
 function prevMonthRange(today: string): { start: string; end: string } {

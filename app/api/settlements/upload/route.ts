@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { parseOrderExcel } from "@/lib/orderParser";
-import { processBTMOrderUpload } from "@/lib/btmOrders";
+import { parseSettlementExcel } from "@/lib/settlementParser";
+import { processBTMSettlementUpload } from "@/lib/btmSettlements";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,7 +9,6 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file");
-    const password = String(formData.get("password") ?? "");
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -26,45 +25,30 @@ export async function POST(request: Request) {
     }
 
     const buffer = await file.arrayBuffer();
-    const { rows, errors: parseErrors, format } = await parseOrderExcel(
-      buffer,
-      password
-    );
+    const { rows, errors: parseErrors, month } = parseSettlementExcel(buffer);
 
     if (rows.length === 0) {
       return NextResponse.json(
         {
           ok: false,
-          error: parseErrors[0] ?? "파싱된 주문 데이터가 없습니다.",
+          error: parseErrors[0] ?? "파싱된 정산 데이터가 없습니다.",
         },
         { status: 400 }
       );
     }
 
-    const result = await processBTMOrderUpload(rows, { format });
+    const result = await processBTMSettlementUpload(rows, month);
 
-    // UI(OrderUploadClient)가 기대하는 OrderUploadResult 형태로 변환
     return NextResponse.json({
       ok: true,
       result: {
-        inserted: result.inserted,
-        insertedProvisional: result.inserted,
-        insertedConfirmed: 0,
-        upgradedToConfirmed: 0,
-        skipped: result.skipped,
-        unmatched: 0,
-        unmatchedProducts: [],
-        totalRows: result.totalRows,
-        elapsedMs: result.elapsedMs,
-        errors: result.errors,
-        stockApplied: false,
+        ...result,
         parseWarnings: parseErrors,
       },
     });
   } catch (e) {
     const message =
       e instanceof Error ? e.message : "업로드 처리 중 오류가 발생했습니다.";
-    const status = message.includes("비밀번호") ? 400 : 500;
-    return NextResponse.json({ ok: false, error: message }, { status });
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }

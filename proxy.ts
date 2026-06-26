@@ -14,12 +14,18 @@ function isPublicPriceOrMarketDataRead(pathname: string): boolean {
   return false
 }
 
+function isAuthorizedCronRequest(request: NextRequest): boolean {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret) return false
+  return request.headers.get('authorization') === `Bearer ${cronSecret}`
+}
+
 export function proxy(request: NextRequest) {
   const session = request.cookies.get(SESSION_COOKIE)
   const { pathname } = request.nextUrl
   const isLoginPage = pathname === '/login'
 
-  if (!session && !isLoginPage && !isPublicPriceOrMarketDataRead(pathname)) {
+  if (!session && !isLoginPage && !isPublicPriceOrMarketDataRead(pathname) && !isAuthorizedCronRequest(request)) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
