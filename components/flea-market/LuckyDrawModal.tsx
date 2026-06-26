@@ -101,21 +101,18 @@ export default function LuckyDrawModal({ items, onConfirm, onClose }: LuckyDrawM
           )}
         </div>
 
+        {/* 결제 수단 */}
         <div style={{ marginBottom: "24px" }}>
-          <p style={{ fontSize: "12px", color: "#888", marginBottom: "10px", fontWeight: 600 }}>결제 수단</p>
-          <div style={{ display: "flex", gap: "10px" }}>
-            {[{ label: "💵 현금", value: false }, { label: "💳 카드", value: true }].map(opt => (
-              <button key={String(opt.value)} onClick={() => setIsCard(opt.value)}
-                style={{
-                  flex: 1, padding: "14px", borderRadius: "12px", fontSize: "16px", fontWeight: 500,
-                  border: isCard === opt.value ? "2px solid #f97316" : "2px solid #e5e5e5",
-                  background: isCard === opt.value ? "#fff7ed" : "#f9f9f9",
-                  color: isCard === opt.value ? "#c2410c" : "#666", cursor: "pointer"
-                }}>
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", userSelect: "none" }}>
+            <input
+              type="checkbox"
+              checked={isCard}
+              onChange={e => setIsCard(e.target.checked)}
+              style={{ width: "20px", height: "20px", borderRadius: "4px", accentColor: "#f97316", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: "15px", color: "#444", fontWeight: 500 }}>💳 카드 결제</span>
+            <span style={{ fontSize: "12px", color: "#bbb", marginLeft: "2px" }}>(체크 안 하면 현금)</span>
+          </label>
         </div>
 
         <button onClick={handleConfirm}

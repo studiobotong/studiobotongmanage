@@ -87,9 +87,9 @@ export default function FleaMarketClient() {
   const cashRevenue = sales.filter(r => !r.is_card).reduce((s, r) => s + r.price, 0);
   const cardRevenue = sales.filter(r => r.is_card).reduce((s, r) => s + r.price, 0);
 
-  const handleSaleConfirm = async (itemName: string, price: number, isCard: boolean) => {
+  const handleSaleConfirm = async (itemName: string, price: number, isCard: boolean, memo: string) => {
     if (!session) return;
-    await recordSale({ sessionId: session.id, itemId: null, itemName, price, isCard });
+    await recordSale({ sessionId: session.id, itemId: null, itemName, price, isCard, memo: memo || undefined });
     setShowSaleInput(false);
     setSales(await getTodaySales(session.id));
     await loadDates();
@@ -103,9 +103,9 @@ export default function FleaMarketClient() {
     await loadDates();
   };
 
-  const handleEditConfirm = async (itemName: string, price: number, isCard: boolean) => {
+  const handleEditConfirm = async (itemName: string, price: number, isCard: boolean, memo: string) => {
     if (!editingSale || !session) return;
-    await updateSale(editingSale.id, { itemName, price, isCard });
+    await updateSale(editingSale.id, { itemName, price, isCard, memo: memo || undefined });
     setEditingSale(null);
     setSales(await getTodaySales(session.id));
   };

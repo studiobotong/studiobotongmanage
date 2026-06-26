@@ -6,7 +6,7 @@ import type { FleaMarketItem, FleaMarketSale } from "@/lib/btmFleaMarket";
 interface EditSaleModalProps {
   sale: FleaMarketSale;
   items: FleaMarketItem[];
-  onConfirm: (itemName: string, price: number, isCard: boolean) => void;
+  onConfirm: (itemName: string, price: number, isCard: boolean, memo: string) => void;
   onClose: () => void;
 }
 
@@ -19,6 +19,7 @@ export default function EditSaleModal({ sale, items, onConfirm, onClose }: EditS
       initialName={sale.item_name}
       initialPrice={sale.price}
       initialIsCard={sale.is_card}
+      initialMemo={sale.memo ?? ""}
       title="판매 정정"
     />
   );

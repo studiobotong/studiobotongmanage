@@ -6,11 +6,12 @@ import type { FleaMarketItem } from "@/lib/btmFleaMarket";
 
 interface SaleInputModalProps {
   items: FleaMarketItem[];
-  onConfirm: (itemName: string, price: number, isCard: boolean) => void;
+  onConfirm: (itemName: string, price: number, isCard: boolean, memo: string) => void;
   onClose: () => void;
   initialName?: string;
   initialPrice?: number;
   initialIsCard?: boolean;
+  initialMemo?: string;
   title?: string;
 }
 
@@ -21,12 +22,14 @@ export default function SaleInputModal({
   initialName = "",
   initialPrice,
   initialIsCard = false,
+  initialMemo = "",
   title = "판매 입력",
 }: SaleInputModalProps) {
   const [selectedId, setSelectedId] = useState<string>("");
   const [itemName, setItemName] = useState(initialName);
   const [price, setPrice] = useState(initialPrice !== undefined ? String(initialPrice) : "");
   const [isCard, setIsCard] = useState(initialIsCard);
+  const [memo, setMemo] = useState(initialMemo);
 
   const handleSelectItem = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -43,7 +46,7 @@ export default function SaleInputModal({
     if (!itemName.trim()) return alert("상품명을 입력해주세요.");
     const p = parseInt(price.replace(/,/g, ""));
     if (isNaN(p) || p < 0) return alert("금액을 입력해주세요.");
-    onConfirm(itemName.trim(), p, isCard);
+    onConfirm(itemName.trim(), p, isCard, memo.trim());
   };
 
   return (
@@ -117,28 +120,34 @@ export default function SaleInputModal({
           </div>
         </div>
 
+        {/* 결제 수단 */}
         <div style={{ marginBottom: "24px" }}>
-          <p style={{ fontSize: "12px", color: "#888", marginBottom: "10px", fontWeight: 600 }}>결제 수단</p>
-          <div style={{ display: "flex", gap: "10px" }}>
-            {[
-              { label: "💵 현금", value: false },
-              { label: "💳 카드", value: true },
-            ].map(opt => (
-              <button
-                key={String(opt.value)}
-                onClick={() => setIsCard(opt.value)}
-                style={{
-                  flex: 1, padding: "14px", borderRadius: "12px", fontSize: "16px", fontWeight: 500,
-                  border: isCard === opt.value ? "2px solid #f97316" : "2px solid #e5e5e5",
-                  background: isCard === opt.value ? "#fff7ed" : "#f9f9f9",
-                  color: isCard === opt.value ? "#c2410c" : "#666",
-                  cursor: "pointer"
-                }}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", userSelect: "none" }}>
+            <input
+              type="checkbox"
+              checked={isCard}
+              onChange={e => setIsCard(e.target.checked)}
+              style={{ width: "20px", height: "20px", borderRadius: "4px", accentColor: "#f97316", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: "15px", color: "#444", fontWeight: 500 }}>💳 카드 결제</span>
+            <span style={{ fontSize: "12px", color: "#bbb", marginLeft: "2px" }}>(체크 안 하면 현금)</span>
+          </label>
+        </div>
+
+        {/* 비고 */}
+        <div style={{ marginBottom: "24px" }}>
+          <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px", fontWeight: 600 }}>비고 <span style={{ fontWeight: 400, color: "#bbb" }}>(선택)</span></p>
+          <input
+            type="text"
+            value={memo}
+            onChange={e => setMemo(e.target.value)}
+            placeholder="특이사항 입력"
+            style={{
+              width: "100%", padding: "12px 14px", borderRadius: "12px",
+              border: "1.5px solid #e5e5e5", fontSize: "15px", color: "#111",
+              outline: "none", background: "#f9f9f9", boxSizing: "border-box"
+            }}
+          />
         </div>
 
         <button
