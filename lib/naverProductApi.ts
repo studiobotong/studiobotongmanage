@@ -84,9 +84,20 @@ export async function fetchNaverProductList(): Promise<
   }
 
   const data = await res.json() as {
-    contents?: { channelProductNo: string; productId: string }[];
+    contents?: unknown[];
   };
-  return data.contents ?? [];
+  const list: { channelProductNo: string; productId: string }[] = [];
+  for (const item of data.contents ?? []) {
+    const channelProducts = (item as Record<string, unknown>).channelProducts as Record<string, unknown>[] | undefined;
+    if (channelProducts && channelProducts.length > 0) {
+      const cp = channelProducts[0];
+      list.push({
+        channelProductNo: String(cp.channelProductNo),
+        productId: String((item as Record<string, unknown>).originProductNo ?? cp.channelProductNo),
+      });
+    }
+  }
+  return list;
 }
 
 // ── 상품 상세 조회 (옵션 포함) ────────────────────────────────────

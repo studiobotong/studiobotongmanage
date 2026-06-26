@@ -63,7 +63,9 @@ async function upsertProduct(detail: NaverProductDetail): Promise<number> {
           },
           { onConflict: "product_id,option_code" }
         );
-      if (!optErr) optCount++;
+      if (!optErr) {
+        optCount++;
+      }
     }
   } else {
     // 옵션 없는 단일 상품
@@ -81,7 +83,9 @@ async function upsertProduct(detail: NaverProductDetail): Promise<number> {
         },
         { onConflict: "product_id,option_code" }
       );
-    if (!optErr) optCount++;
+    if (!optErr) {
+      optCount++;
+    }
   }
 
   return optCount;
