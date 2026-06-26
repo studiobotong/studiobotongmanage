@@ -190,14 +190,14 @@ export default function FleaMarketClient() {
           <button
             onClick={() => { if (session) setShowSaleInput(true); }}
             style={{
-              padding: "18px 8px", borderRadius: "16px", background: "#111",
+              padding: "18px 8px", borderRadius: "16px", background: "#2563eb",
               border: "none", cursor: "pointer", textAlign: "center",
-              boxShadow: "0 2px 8px rgba(0,0,0,0.15)"
+              boxShadow: "0 2px 8px rgba(37,99,235,0.25)"
             }}
           >
             <div style={{ fontSize: "24px", marginBottom: "6px" }}>🛒</div>
             <div style={{ fontSize: "14px", fontWeight: 600, color: "#fff" }}>판매입력</div>
-            <div style={{ fontSize: "11px", color: "#aaa", marginTop: "2px" }}>즐겨찾기 연동</div>
+            <div style={{ fontSize: "11px", color: "#bfdbfe", marginTop: "2px" }}>즐겨찾기 연동</div>
           </button>
 
           <button
