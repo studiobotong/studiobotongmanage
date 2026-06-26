@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { syncNaverAdReports } from "@/lib/naverAdSync";
+import { requestNaverAdReport } from "@/lib/naverAdSync";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-// GET: 어제치 자동 수집 (Cron용)
+// GET: 보고서 생성 요청 (Cron 1 — KST 10:00)
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await syncNaverAdReports();
+    const result = await requestNaverAdReport();
     return NextResponse.json({ ok: true, result, timestamp: new Date().toISOString() });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   }
 }
 
-// POST: 날짜 범위 지정 수집
+// POST: 날짜 지정 보고서 생성 요청
 export async function POST(request: Request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -33,8 +33,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body = await request.json() as { from?: string; to?: string };
-    const result = await syncNaverAdReports(body.from, body.to);
+    const body = await request.json() as { date?: string };
+    const result = await requestNaverAdReport(body.date);
     return NextResponse.json({ ok: true, result, timestamp: new Date().toISOString() });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

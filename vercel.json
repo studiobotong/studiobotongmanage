@@ -9,8 +9,16 @@
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/cron/sync-ad-reports",
+      "path": "/api/cron/sync-products",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/sync-ad-reports",
+      "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/download-ad-reports",
+      "schedule": "0 2 * * *"
     }
   ]
 }
