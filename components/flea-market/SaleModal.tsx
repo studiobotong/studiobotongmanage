@@ -39,7 +39,7 @@ export default function SaleModal({ item, onConfirm, onClose }: SaleModalProps) 
       <div
         style={{
           width: "100%",
-          background: "var(--surface-2)",
+          background: "#fff",
           borderRadius: "20px 20px 0 0",
           padding: "24px",
           marginBottom: 0,
@@ -49,15 +49,14 @@ export default function SaleModal({ item, onConfirm, onClose }: SaleModalProps) 
         onClick={e => e.stopPropagation()}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-          <h3 style={{ fontSize: "18px", fontWeight: 500, color: "var(--text-primary)" }}>{item.name}</h3>
-          <button onClick={onClose} style={{ color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer" }}>
+          <h3 style={{ fontSize: "18px", fontWeight: 600, color: "#111" }}>{item.name}</h3>
+          <button onClick={onClose} style={{ color: "#888", background: "none", border: "none", cursor: "pointer" }}>
             <X size={22} />
           </button>
         </div>
 
-        {/* 금액 입력 */}
         <div style={{ marginBottom: "20px" }}>
-          <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "8px" }}>판매 금액</p>
+          <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px" }}>판매 금액</p>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <input
               type="number"
@@ -67,17 +66,16 @@ export default function SaleModal({ item, onConfirm, onClose }: SaleModalProps) 
               placeholder={isOther ? "금액 입력" : undefined}
               style={{
                 flex: 1, fontSize: "28px", fontWeight: 500, textAlign: "right",
-                border: "none", borderBottom: "2px solid var(--border-accent)",
-                background: "transparent", color: "var(--text-primary)", padding: "8px 0", outline: "none"
+                border: "none", borderBottom: "2px solid #5b6af4",
+                background: "transparent", color: "#111", padding: "8px 0", outline: "none"
               }}
             />
-            <span style={{ fontSize: "18px", color: "var(--text-secondary)" }}>원</span>
+            <span style={{ fontSize: "18px", color: "#888" }}>원</span>
           </div>
         </div>
 
-        {/* 결제 수단 */}
         <div style={{ marginBottom: "24px" }}>
-          <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "10px" }}>결제 수단</p>
+          <p style={{ fontSize: "12px", color: "#888", marginBottom: "10px" }}>결제 수단</p>
           <div style={{ display: "flex", gap: "10px" }}>
             {[false, true].map(card => (
               <button
@@ -85,9 +83,9 @@ export default function SaleModal({ item, onConfirm, onClose }: SaleModalProps) 
                 onClick={() => setIsCard(card)}
                 style={{
                   flex: 1, padding: "12px", borderRadius: "12px", fontSize: "15px", fontWeight: 500,
-                  border: isCard === card ? "2px solid var(--border-accent)" : "2px solid var(--border)",
-                  background: isCard === card ? "var(--bg-accent)" : "var(--surface-1)",
-                  color: isCard === card ? "var(--text-accent)" : "var(--text-secondary)",
+                  border: isCard === card ? "2px solid #5b6af4" : "2px solid #e5e5e5",
+                  background: isCard === card ? "#eef0fe" : "#f9f9f9",
+                  color: isCard === card ? "#5b6af4" : "#666",
                   cursor: "pointer"
                 }}
               >
@@ -97,12 +95,11 @@ export default function SaleModal({ item, onConfirm, onClose }: SaleModalProps) 
           </div>
         </div>
 
-        {/* 저장 버튼 */}
         <button
           onClick={handleConfirm}
           style={{
             width: "100%", padding: "16px", borderRadius: "14px", fontSize: "17px", fontWeight: 500,
-            background: "var(--text-accent)", color: "#fff", border: "none", cursor: "pointer"
+            background: "#5b6af4", color: "#fff", border: "none", cursor: "pointer"
           }}
         >
           판매 기록
