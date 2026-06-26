@@ -43,6 +43,8 @@ export default function ProductsPageClient() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [hideOutOfStock, setHideOutOfStock] = useState(true);
+  const [showAll, setShowAll] = useState(false);
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
@@ -131,6 +133,13 @@ export default function ProductsPageClient() {
     }));
   };
 
+  const filteredProducts = showAll
+    ? products
+    : products.filter(p => {
+        if (hideOutOfStock && (p.status === "OUTOFSTOCK" || p.status === "SUSPENSION")) return false;
+        return true;
+      });
+
   const totalProducts = products.length;
   const saleProducts = products.filter(p => p.status === "SALE").length;
   const lowStockCount = Object.values(optionsMap).flat().filter(
@@ -156,16 +165,32 @@ export default function ProductsPageClient() {
           ))}
         </div>
 
-        {/* 헤더 + 동기화 버튼 */}
-        <div className="flex justify-end mb-4">
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleSync}
-            disabled={syncing}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideOutOfStock}
+                onChange={e => { setHideOutOfStock(e.target.checked); setShowAll(false); }}
+                className="w-4 h-4 rounded accent-[#5b6af4]"
+              />
+              <span className="text-sm text-gray-600">품절·판매중지 숨기기</span>
+            </label>
+            <button
+              onClick={() => setShowAll(v => !v)}
+              className={clsx(
+                "text-xs px-3 py-1.5 rounded-lg border transition-colors",
+                showAll
+                  ? "bg-[#5b6af4] text-white border-[#5b6af4]"
+                  : "bg-white text-gray-500 border-gray-200 hover:border-[#5b6af4]"
+              )}
+            >
+              {showAll ? "전체 보기 중" : "전체 보기"}
+            </button>
+          </div>
+          <Button variant="primary" size="sm" onClick={handleSync} disabled={syncing}
             icon={syncing ? Loader2 : RefreshCw}
-            className={syncing ? "[&_svg]:animate-spin" : ""}
-          >
+            className={syncing ? "[&_svg]:animate-spin" : ""}>
             {syncing ? "동기화 중..." : "네이버 상품 동기화"}
           </Button>
         </div>
@@ -185,7 +210,7 @@ export default function ProductsPageClient() {
             </div>
           ) : (
             <div className="divide-y divide-gray-50">
-              {products.map(product => {
+              {filteredProducts.map(product => {
                 const statusInfo = STATUS_LABEL[product.status] ?? { label: product.status, color: "bg-gray-50 text-gray-400" };
                 const opts = optionsMap[product.product_id] ?? [];
                 const isExpanded = expandedId === product.product_id;
