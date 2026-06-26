@@ -17,14 +17,15 @@ function buildLuckyItemOptions(
   items: FleaMarketItem[],
   optionsMap: Record<number, FleaMarketItemOption[]>
 ) {
-  const result: { key: string; value: string }[] = [];
+  const result: { key: string; value: string; label: string }[] = [];
   for (const item of items) {
     const opts = optionsMap[item.id] ?? [];
     if (opts.length === 0) {
-      result.push({ key: `item-${item.id}`, value: item.name });
+      result.push({ key: `item-${item.id}`, value: item.name, label: `${item.name} (${item.default_price.toLocaleString()}원)` });
     } else {
       for (const opt of opts) {
-        result.push({ key: `opt-${opt.id}`, value: `${item.name} - ${opt.option_name}` });
+        const value = `${item.name} - ${opt.option_name}`;
+        result.push({ key: `opt-${opt.id}`, value, label: `${value} (${opt.price.toLocaleString()}원)` });
       }
     }
   }
@@ -109,7 +110,7 @@ export default function LuckyDrawModal({ items, optionsMap, onConfirm, onClose }
           >
             <option value="">— 즐겨찾기에서 선택 —</option>
             {luckyItemOptions.map(opt => (
-              <option key={opt.key} value={opt.value}>{opt.value}</option>
+              <option key={opt.key} value={opt.value}>{opt.label}</option>
             ))}
           </select>
 

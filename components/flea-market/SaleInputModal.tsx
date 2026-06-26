@@ -43,9 +43,9 @@ export default function SaleInputModal({
     const found = items.find(i => String(i.id) === val);
     if (found) {
       setItemName(found.name);
-      setPrice(String(found.default_price));
       const opts = await getFleaMarketItemOptions(found.id);
       setOptions(opts);
+      setPrice(opts.length > 0 ? "" : String(found.default_price));
     }
   };
 
@@ -103,6 +103,7 @@ export default function SaleInputModal({
                   key={opt.id}
                   onClick={() => {
                     setSelectedOption(opt.option_name);
+                    setPrice(String(opt.price));
                     const found = items.find(i => String(i.id) === selectedId);
                     if (found) setItemName(`${found.name} - ${opt.option_name}`);
                   }}
@@ -114,7 +115,7 @@ export default function SaleInputModal({
                     cursor: "pointer"
                   }}
                 >
-                  {opt.option_name}
+                  {opt.option_name} ({opt.price.toLocaleString()}원)
                 </button>
               ))}
             </div>

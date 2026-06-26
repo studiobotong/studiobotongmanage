@@ -215,6 +215,7 @@ export interface FleaMarketItemOption {
   id: number;
   item_id: number;
   option_name: string;
+  price: number;
   sort_order: number;
 }
 
@@ -256,11 +257,24 @@ export async function getAllFleaMarketItemOptions(): Promise<
 export async function createFleaMarketItemOption(
   itemId: number,
   optionName: string,
-  sortOrder: number
+  sortOrder: number,
+  price: number
 ): Promise<void> {
   const { error } = await btmSupabase
     .from("btm_flea_market_item_options")
-    .insert({ item_id: itemId, option_name: optionName, sort_order: sortOrder });
+    .insert({ item_id: itemId, option_name: optionName, sort_order: sortOrder, price });
+  if (error) throw error;
+}
+
+export async function updateFleaMarketItemOption(
+  id: number,
+  optionName: string,
+  price: number
+): Promise<void> {
+  const { error } = await btmSupabase
+    .from("btm_flea_market_item_options")
+    .update({ option_name: optionName, price })
+    .eq("id", id);
   if (error) throw error;
 }
 

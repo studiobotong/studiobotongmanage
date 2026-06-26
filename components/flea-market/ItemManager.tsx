@@ -9,6 +9,7 @@ import {
   getFleaMarketItemOptions,
   createFleaMarketItemOption,
   deleteFleaMarketItemOption,
+  updateFleaMarketItemOption,
 } from "@/lib/btmFleaMarket";
 import type { FleaMarketItem, FleaMarketItemOption } from "@/lib/btmFleaMarket";
 
@@ -33,7 +34,11 @@ export default function ItemManager({ items, onRefresh }: ItemManagerProps) {
 
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [optionsMap, setOptionsMap] = useState<Record<number, FleaMarketItemOption[]>>({});
-  const [newOption, setNewOption] = useState<Record<number, string>>({});
+  const [newOptionName, setNewOptionName] = useState<Record<number, string>>({});
+  const [newOptionPrice, setNewOptionPrice] = useState<Record<number, string>>({});
+  const [editOptionId, setEditOptionId] = useState<number | null>(null);
+  const [editOptionName, setEditOptionName] = useState("");
+  const [editOptionPrice, setEditOptionPrice] = useState("");
 
   const loadOptions = async (itemId: number) => {
     const opts = await getFleaMarketItemOptions(itemId);
@@ -69,12 +74,25 @@ export default function ItemManager({ items, onRefresh }: ItemManagerProps) {
     onRefresh();
   };
 
-  const handleAddOption = async (itemId: number) => {
-    const name = (newOption[itemId] ?? "").trim();
-    if (!name) return;
+  const handleAddOption = async (itemId: number, defaultPrice: number) => {
+    const name = (newOptionName[itemId] ?? "").trim();
+    const priceStr = newOptionPrice[itemId] ?? String(defaultPrice);
+    const price = parseInt(priceStr);
+    if (!name || isNaN(price) || price < 0) return;
     const existing = optionsMap[itemId] ?? [];
-    await createFleaMarketItemOption(itemId, name, existing.length);
-    setNewOption(prev => ({ ...prev, [itemId]: "" }));
+    await createFleaMarketItemOption(itemId, name, existing.length, price);
+    setNewOptionName(prev => ({ ...prev, [itemId]: "" }));
+    setNewOptionPrice(prev => ({ ...prev, [itemId]: "" }));
+    await loadOptions(itemId);
+  };
+
+  const handleUpdateOption = async (itemId: number) => {
+    if (editOptionId === null) return;
+    const name = editOptionName.trim();
+    const price = parseInt(editOptionPrice);
+    if (!name || isNaN(price) || price < 0) return;
+    await updateFleaMarketItemOption(editOptionId, name, price);
+    setEditOptionId(null);
     await loadOptions(itemId);
   };
 
@@ -173,21 +191,47 @@ export default function ItemManager({ items, onRefresh }: ItemManagerProps) {
                     옵션 목록 <span style={{ fontWeight: 400 }}>(색상, 종류 등)</span>
                   </p>
 
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
                     {(optionsMap[item.id] ?? []).length === 0 ? (
                       <span style={{ fontSize: "13px", color: "#ccc" }}>옵션 없음 (바로 판매 가능)</span>
                     ) : (
                       (optionsMap[item.id] ?? []).map(opt => (
                         <div key={opt.id} style={{
-                          display: "flex", alignItems: "center", gap: "4px",
-                          padding: "5px 10px", borderRadius: "20px",
+                          display: "flex", alignItems: "center", gap: "8px",
+                          padding: "8px 10px", borderRadius: "10px",
                           background: "#fff", border: "1px solid #e5e5e5", fontSize: "13px", color: "#444"
                         }}>
-                          {opt.option_name}
-                          <button onClick={() => handleDeleteOption(item.id, opt.id)}
-                            style={{ background: "none", border: "none", cursor: "pointer", color: "#fca5a5", padding: "0", lineHeight: 1 }}>
-                            <X size={13} />
-                          </button>
+                          {editOptionId === opt.id ? (
+                            <>
+                              <input value={editOptionName} onChange={e => setEditOptionName(e.target.value)}
+                                style={{ ...inputStyle, flex: 2, fontSize: "13px", padding: "6px 10px" }} />
+                              <input value={editOptionPrice} onChange={e => setEditOptionPrice(e.target.value)}
+                                type="number" inputMode="numeric"
+                                style={{ ...inputStyle, flex: 1, fontSize: "13px", padding: "6px 10px" }} />
+                              <button onClick={() => void handleUpdateOption(item.id)}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#22c55e" }}>
+                                <Check size={16} />
+                              </button>
+                              <button onClick={() => setEditOptionId(null)}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#aaa" }}>
+                                <X size={16} />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span style={{ flex: 2, fontWeight: 500 }}>{opt.option_name}</span>
+                              <span style={{ fontWeight: 600, color: "#111" }}>{opt.price.toLocaleString()}원</span>
+                              <button
+                                onClick={() => { setEditOptionId(opt.id); setEditOptionName(opt.option_name); setEditOptionPrice(String(opt.price)); }}
+                                style={{ padding: "4px 8px", borderRadius: "6px", background: "#f5f5f5", border: "none", cursor: "pointer", fontSize: "11px", color: "#666" }}>
+                                수정
+                              </button>
+                              <button onClick={() => void handleDeleteOption(item.id, opt.id)}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#fca5a5", padding: "0", lineHeight: 1 }}>
+                                <X size={13} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       ))
                     )}
@@ -195,13 +239,21 @@ export default function ItemManager({ items, onRefresh }: ItemManagerProps) {
 
                   <div style={{ display: "flex", gap: "8px" }}>
                     <input
-                      placeholder="옵션명 (예: 빨강, 파랑)"
-                      value={newOption[item.id] ?? ""}
-                      onChange={e => setNewOption(prev => ({ ...prev, [item.id]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === "Enter") void handleAddOption(item.id); }}
+                      placeholder="옵션명 (예: 빨강)"
+                      value={newOptionName[item.id] ?? ""}
+                      onChange={e => setNewOptionName(prev => ({ ...prev, [item.id]: e.target.value }))}
+                      style={{ ...inputStyle, flex: 2, fontSize: "13px", padding: "8px 12px" }}
+                    />
+                    <input
+                      placeholder="가격"
+                      type="number"
+                      inputMode="numeric"
+                      value={newOptionPrice[item.id] ?? ""}
+                      onChange={e => setNewOptionPrice(prev => ({ ...prev, [item.id]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter") void handleAddOption(item.id, item.default_price); }}
                       style={{ ...inputStyle, flex: 1, fontSize: "13px", padding: "8px 12px" }}
                     />
-                    <button onClick={() => void handleAddOption(item.id)}
+                    <button onClick={() => void handleAddOption(item.id, item.default_price)}
                       style={{
                         padding: "8px 14px", borderRadius: "10px", background: "#111",
                         color: "#fff", border: "none", fontSize: "13px", fontWeight: 500, cursor: "pointer"
