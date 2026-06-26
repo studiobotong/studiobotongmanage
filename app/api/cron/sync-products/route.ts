@@ -1,0 +1,23 @@
+import { NextResponse } from "next/server";
+import { syncNaverProducts } from "@/lib/naverProductSync";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+export async function GET(request: Request) {
+  const authHeader = request.headers.get("authorization");
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const result = await syncNaverProducts();
+    return NextResponse.json({ ok: true, result, timestamp: new Date().toISOString() });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  }
+}
