@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { X } from "lucide-react";
-import type { FleaMarketItem } from "@/lib/btmFleaMarket";
+import { getFleaMarketItemOptions } from "@/lib/btmFleaMarket";
+import type { FleaMarketItem, FleaMarketItemOption } from "@/lib/btmFleaMarket";
 
 interface SaleInputModalProps {
   items: FleaMarketItem[];
@@ -30,20 +31,27 @@ export default function SaleInputModal({
   const [price, setPrice] = useState(initialPrice !== undefined ? String(initialPrice) : "");
   const [isCard, setIsCard] = useState(initialIsCard);
   const [memo, setMemo] = useState(initialMemo);
+  const [options, setOptions] = useState<FleaMarketItemOption[]>([]);
+  const [selectedOption, setSelectedOption] = useState("");
 
-  const handleSelectItem = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleSelectItem = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
     setSelectedId(val);
+    setSelectedOption("");
+    setOptions([]);
     if (val === "") return;
     const found = items.find(i => String(i.id) === val);
     if (found) {
       setItemName(found.name);
       setPrice(String(found.default_price));
+      const opts = await getFleaMarketItemOptions(found.id);
+      setOptions(opts);
     }
   };
 
   const handleConfirm = () => {
     if (!itemName.trim()) return alert("상품명을 입력해주세요.");
+    if (options.length > 0 && !selectedOption) return alert("옵션을 선택해주세요.");
     const p = parseInt(price.replace(/,/g, ""));
     if (isNaN(p) || p < 0) return alert("금액을 입력해주세요.");
     onConfirm(itemName.trim(), p, isCard, memo.trim());
@@ -85,6 +93,33 @@ export default function SaleInputModal({
             ))}
           </select>
         </div>
+
+        {options.length > 0 && (
+          <div style={{ marginBottom: "16px" }}>
+            <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px", fontWeight: 600 }}>옵션 선택</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {options.map(opt => (
+                <button
+                  key={opt.id}
+                  onClick={() => {
+                    setSelectedOption(opt.option_name);
+                    const found = items.find(i => String(i.id) === selectedId);
+                    if (found) setItemName(`${found.name} - ${opt.option_name}`);
+                  }}
+                  style={{
+                    padding: "8px 16px", borderRadius: "20px", fontSize: "14px", fontWeight: 500,
+                    border: selectedOption === opt.option_name ? "2px solid #2563eb" : "2px solid #e5e5e5",
+                    background: selectedOption === opt.option_name ? "#eff6ff" : "#f9f9f9",
+                    color: selectedOption === opt.option_name ? "#1d4ed8" : "#444",
+                    cursor: "pointer"
+                  }}
+                >
+                  {opt.option_name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ marginBottom: "16px" }}>
           <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px", fontWeight: 600 }}>상품명</p>

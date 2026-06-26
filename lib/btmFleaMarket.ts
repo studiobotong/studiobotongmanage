@@ -208,3 +208,66 @@ export async function updateSale(
     .eq("id", id);
   if (error) throw error;
 }
+
+// ── 옵션 타입 ──────────────────────────────────────────────────
+
+export interface FleaMarketItemOption {
+  id: number;
+  item_id: number;
+  option_name: string;
+  sort_order: number;
+}
+
+// ── 옵션 조회 ─────────────────────────────────────────────────
+
+export async function getFleaMarketItemOptions(
+  itemId: number
+): Promise<FleaMarketItemOption[]> {
+  const { data, error } = await btmSupabase
+    .from("btm_flea_market_item_options")
+    .select("*")
+    .eq("item_id", itemId)
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as FleaMarketItemOption[];
+}
+
+/** 전체 상품의 옵션을 한 번에 조회 (item_id → options 맵) */
+export async function getAllFleaMarketItemOptions(): Promise<
+  Record<number, FleaMarketItemOption[]>
+> {
+  const { data, error } = await btmSupabase
+    .from("btm_flea_market_item_options")
+    .select("*")
+    .order("sort_order", { ascending: true });
+  if (error) throw error;
+
+  const map: Record<number, FleaMarketItemOption[]> = {};
+  for (const row of data ?? []) {
+    const r = row as FleaMarketItemOption;
+    if (!map[r.item_id]) map[r.item_id] = [];
+    map[r.item_id]!.push(r);
+  }
+  return map;
+}
+
+// ── 옵션 추가/삭제 ────────────────────────────────────────────
+
+export async function createFleaMarketItemOption(
+  itemId: number,
+  optionName: string,
+  sortOrder: number
+): Promise<void> {
+  const { error } = await btmSupabase
+    .from("btm_flea_market_item_options")
+    .insert({ item_id: itemId, option_name: optionName, sort_order: sortOrder });
+  if (error) throw error;
+}
+
+export async function deleteFleaMarketItemOption(id: number): Promise<void> {
+  const { error } = await btmSupabase
+    .from("btm_flea_market_item_options")
+    .delete()
+    .eq("id", id);
+  if (error) throw error;
+}

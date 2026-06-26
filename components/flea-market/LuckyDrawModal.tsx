@@ -2,17 +2,36 @@
 
 import { useState } from "react";
 import { X } from "lucide-react";
-import type { FleaMarketItem } from "@/lib/btmFleaMarket";
+import type { FleaMarketItem, FleaMarketItemOption } from "@/lib/btmFleaMarket";
 
 interface LuckyDrawModalProps {
   items: FleaMarketItem[];
+  optionsMap: Record<number, FleaMarketItemOption[]>;
   onConfirm: (count: number, price: number, luckyItem: string, isCard: boolean) => void;
   onClose: () => void;
 }
 
 const DEFAULT_PRICE = 2000;
 
-export default function LuckyDrawModal({ items, onConfirm, onClose }: LuckyDrawModalProps) {
+function buildLuckyItemOptions(
+  items: FleaMarketItem[],
+  optionsMap: Record<number, FleaMarketItemOption[]>
+) {
+  const result: { key: string; value: string }[] = [];
+  for (const item of items) {
+    const opts = optionsMap[item.id] ?? [];
+    if (opts.length === 0) {
+      result.push({ key: `item-${item.id}`, value: item.name });
+    } else {
+      for (const opt of opts) {
+        result.push({ key: `opt-${opt.id}`, value: `${item.name} - ${opt.option_name}` });
+      }
+    }
+  }
+  return result;
+}
+
+export default function LuckyDrawModal({ items, optionsMap, onConfirm, onClose }: LuckyDrawModalProps) {
   const [count, setCount] = useState(1);
   const [priceOverride, setPriceOverride] = useState(String(DEFAULT_PRICE));
   const [luckyItem, setLuckyItem] = useState("");
@@ -22,6 +41,7 @@ export default function LuckyDrawModal({ items, onConfirm, onClose }: LuckyDrawM
 
   const totalPrice = parseInt(priceOverride || "0") * count;
   const finalItem = useCustom ? customItem : luckyItem;
+  const luckyItemOptions = buildLuckyItemOptions(items, optionsMap);
 
   const handleConfirm = () => {
     if (!finalItem.trim()) return alert("당첨 상품을 선택하거나 입력해주세요.");
@@ -88,8 +108,8 @@ export default function LuckyDrawModal({ items, onConfirm, onClose }: LuckyDrawM
             }}
           >
             <option value="">— 즐겨찾기에서 선택 —</option>
-            {items.map(item => (
-              <option key={item.id} value={item.name}>{item.name}</option>
+            {luckyItemOptions.map(opt => (
+              <option key={opt.key} value={opt.value}>{opt.value}</option>
             ))}
           </select>
 

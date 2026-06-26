@@ -8,6 +8,7 @@ import EditSaleModal from "./EditSaleModal";
 import ItemManager from "./ItemManager";
 import {
   getFleaMarketItems,
+  getAllFleaMarketItemOptions,
   getOrCreateTodaySession,
   getSessionByDate,
   getSessionDates,
@@ -16,7 +17,7 @@ import {
   deleteSale,
   updateSale,
 } from "@/lib/btmFleaMarket";
-import type { FleaMarketItem, FleaMarketSession, FleaMarketSale } from "@/lib/btmFleaMarket";
+import type { FleaMarketItem, FleaMarketItemOption, FleaMarketSession, FleaMarketSale } from "@/lib/btmFleaMarket";
 
 function formatDateTime(iso: string) {
   const d = new Date(iso);
@@ -32,6 +33,7 @@ function todayStr() {
 
 export default function FleaMarketClient() {
   const [items, setItems] = useState<FleaMarketItem[]>([]);
+  const [optionsMap, setOptionsMap] = useState<Record<number, FleaMarketItemOption[]>>({});
   const [session, setSession] = useState<FleaMarketSession | null>(null);
   const [sales, setSales] = useState<FleaMarketSale[]>([]);
   const [sessionDates, setSessionDates] = useState<{ id: number; date: string }[]>([]);
@@ -44,8 +46,12 @@ export default function FleaMarketClient() {
   const [editingSale, setEditingSale] = useState<FleaMarketSale | null>(null);
 
   const loadItems = useCallback(async () => {
-    const itemList = await getFleaMarketItems();
+    const [itemList, opts] = await Promise.all([
+      getFleaMarketItems(),
+      getAllFleaMarketItemOptions(),
+    ]);
     setItems(itemList);
+    setOptionsMap(opts);
   }, []);
 
   const loadDates = useCallback(async () => {
@@ -283,6 +289,7 @@ export default function FleaMarketClient() {
       {showLucky && (
         <LuckyDrawModal
           items={items}
+          optionsMap={optionsMap}
           onConfirm={handleLuckyConfirm}
           onClose={() => setShowLucky(false)}
         />
