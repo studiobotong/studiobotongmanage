@@ -78,8 +78,6 @@ export async function fetchNaverAdStats(
     datePreset: "yesterday",
     timeIncrement: "1",
   });
-  console.log("[naverAdStats] 요청 params:", params.toString());
-  console.log("[naverAdStats] campaignIds:", campaignIds);
 
   const res = await fetch(`${BASE_URL}${uri}?${params.toString()}`, {
     headers: getHeaders("GET", uri),
