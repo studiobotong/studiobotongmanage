@@ -69,35 +69,56 @@ export default function LuckyDrawModal({ items, onConfirm, onClose }: LuckyDrawM
           </p>
         </div>
 
+        {/* 당첨 상품 */}
         <div style={{ marginBottom: "16px" }}>
           <p style={{ fontSize: "12px", color: "#888", marginBottom: "10px", fontWeight: 600 }}>당첨 상품</p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
+
+          <select
+            value={luckyItem}
+            onChange={e => {
+              setLuckyItem(e.target.value);
+              if (e.target.value !== "") setUseCustom(false);
+            }}
+            style={{
+              width: "100%", padding: "12px 14px", borderRadius: "12px",
+              border: "1.5px solid #e5e5e5", background: "#f9f9f9",
+              fontSize: "15px", color: luckyItem ? "#111" : "#aaa",
+              outline: "none", appearance: "none", WebkitAppearance: "none",
+              marginBottom: "10px", boxSizing: "border-box"
+            }}
+          >
+            <option value="">— 즐겨찾기에서 선택 —</option>
             {items.map(item => (
-              <button key={item.id} onClick={() => { setLuckyItem(item.name); setUseCustom(false); }}
-                style={{
-                  padding: "8px 16px", borderRadius: "20px", fontSize: "14px",
-                  border: luckyItem === item.name && !useCustom ? "2px solid #f97316" : "2px solid #e5e5e5",
-                  background: luckyItem === item.name && !useCustom ? "#fff7ed" : "#f9f9f9",
-                  color: luckyItem === item.name && !useCustom ? "#c2410c" : "#444",
-                  cursor: "pointer", fontWeight: 500
-                }}>
-                {item.name}
-              </button>
+              <option key={item.id} value={item.name}>{item.name}</option>
             ))}
-            <button onClick={() => { setUseCustom(true); setLuckyItem(""); }}
-              style={{
-                padding: "8px 16px", borderRadius: "20px", fontSize: "14px",
-                border: useCustom ? "2px solid #f97316" : "2px solid #e5e5e5",
-                background: useCustom ? "#fff7ed" : "#f9f9f9",
-                color: useCustom ? "#c2410c" : "#444",
-                cursor: "pointer", fontWeight: 500
-              }}>
-              직접 입력
-            </button>
-          </div>
+          </select>
+
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", marginBottom: "8px" }}>
+            <input
+              type="checkbox"
+              checked={useCustom}
+              onChange={e => {
+                setUseCustom(e.target.checked);
+                if (e.target.checked) setLuckyItem("");
+              }}
+              style={{ width: "18px", height: "18px", accentColor: "#f97316", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: "14px", color: "#666" }}>직접 입력</span>
+          </label>
+
           {useCustom && (
-            <input type="text" placeholder="당첨 상품명 입력" value={customItem} onChange={e => setCustomItem(e.target.value)}
-              style={{ width: "100%", padding: "12px 14px", borderRadius: "12px", border: "1.5px solid #e5e5e5", fontSize: "15px", color: "#111", outline: "none", background: "#f9f9f9", boxSizing: "border-box" }} />
+            <input
+              type="text"
+              placeholder="당첨 상품명 입력"
+              value={customItem}
+              onChange={e => setCustomItem(e.target.value)}
+              autoFocus
+              style={{
+                width: "100%", padding: "12px 14px", borderRadius: "12px",
+                border: "1.5px solid #e5e5e5", fontSize: "15px", color: "#111",
+                outline: "none", background: "#f9f9f9", boxSizing: "border-box"
+              }}
+            />
           )}
         </div>
 
