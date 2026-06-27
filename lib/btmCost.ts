@@ -244,3 +244,112 @@ export async function updateLaborCost(
     .eq("id", optionId);
   return error ? { ok: false, error: error.message } : { ok: true };
 }
+
+// ── 옵션-부자재 연결 ─────────────────────────────────────────────
+
+export interface BTMOptionMaterial {
+  id: number;
+  option_id: number;
+  material_id: number;
+  quantity_per_unit: number;
+  // join
+  material_name?: string;
+  material_unit?: string;
+  material_category?: string;
+  latest_price?: number; // btm_purchases에서 최근 단가
+}
+
+// 특정 옵션의 부자재 목록 조회
+export async function getOptionMaterials(optionId: number): Promise<BTMOptionMaterial[]> {
+  const { data } = await btmSupabase
+    .from("btm_option_materials")
+    .select("*")
+    .eq("option_id", optionId)
+    .order("id");
+  return (data ?? []) as BTMOptionMaterial[];
+}
+
+// 옵션-부자재 연결 추가
+export async function addOptionMaterial(
+  optionId: number,
+  materialId: number,
+  quantityPerUnit: number
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await btmSupabase
+    .from("btm_option_materials")
+    .upsert(
+      { option_id: optionId, material_id: materialId, quantity_per_unit: quantityPerUnit },
+      { onConflict: "option_id,material_id" }
+    );
+  if (error) return { ok: false, error: error.message };
+
+  // total_cost 재계산
+  await recalcTotalCost(optionId);
+  return { ok: true };
+}
+
+// 옵션-부자재 연결 삭제
+export async function removeOptionMaterial(id: number, optionId: number): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await btmSupabase
+    .from("btm_option_materials")
+    .delete()
+    .eq("id", id);
+  if (error) return { ok: false, error: error.message };
+
+  await recalcTotalCost(optionId);
+  return { ok: true };
+}
+
+// total_cost 재계산 (cost_price + 부자재비 합계 + labor_cost)
+export async function recalcTotalCost(optionId: number): Promise<void> {
+  // 옵션 기본 정보
+  const { data: opt } = await btmSupabase
+    .from("btm_product_options")
+    .select("cost_price, labor_cost")
+    .eq("id", optionId)
+    .single();
+
+  if (!opt) return;
+
+  // 연결된 부자재 목록
+  const { data: links } = await btmSupabase
+    .from("btm_option_materials")
+    .select("material_id, quantity_per_unit")
+    .eq("option_id", optionId);
+
+  let materialCost = 0;
+  for (const link of links ?? []) {
+    // 해당 부자재의 최근 구매단가
+    const { data: purchase } = await btmSupabase
+      .from("btm_purchases")
+      .select("final_unit_price")
+      .eq("material_id", link.material_id)
+      .eq("purchase_type", "material")
+      .order("purchase_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const price = (purchase as { final_unit_price: number } | null)?.final_unit_price ?? 0;
+    materialCost += price * Number(link.quantity_per_unit);
+  }
+
+  const totalCost = (opt.cost_price ?? 0) + materialCost + (opt.labor_cost ?? 0);
+
+  await btmSupabase
+    .from("btm_product_options")
+    .update({ total_cost: Math.round(totalCost) })
+    .eq("id", optionId);
+}
+
+// 부자재 최근 구매단가 조회
+export async function getMaterialLatestPrice(materialId: number): Promise<number> {
+  const { data } = await btmSupabase
+    .from("btm_purchases")
+    .select("final_unit_price")
+    .eq("material_id", materialId)
+    .eq("purchase_type", "material")
+    .order("purchase_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { final_unit_price: number } | null)?.final_unit_price ?? 0;
+}

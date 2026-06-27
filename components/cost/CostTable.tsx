@@ -6,11 +6,13 @@ import clsx from "clsx";
 import Card from "@/components/Card";
 import { getCostTable, updateLaborCost } from "@/lib/btmCost";
 import type { BTMCostRow } from "@/lib/btmCost";
+import OptionMaterialPanel from "./OptionMaterialPanel";
 
 export default function CostTable() {
   const [rows, setRows]       = useState<BTMCostRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState("");
+  const [selectedRow, setSelectedRow] = useState<BTMCostRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,9 +85,20 @@ export default function CostTable() {
                         : 0;
                       const isLowMargin = margin < 30 && row.selling_price > 0;
                       return (
-                        <tr key={row.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                        <tr
+                          key={row.id}
+                          className="border-b border-gray-50 hover:bg-gray-50/50 cursor-pointer"
+                          onClick={e => {
+                            // input 클릭 시 패널 열리지 않도록
+                            if ((e.target as HTMLElement).tagName === "INPUT") return;
+                            setSelectedRow(row);
+                          }}
+                        >
                           <td className="px-4 py-2.5 text-gray-700">
-                            <p>{row.option_name}</p>
+                            <p className="flex items-center gap-1">
+                              {row.option_name}
+                              <span className="text-[10px] text-gray-300 ml-1">↗</span>
+                            </p>
                             <p className="text-[10px] text-gray-300">{row.option_code}</p>
                           </td>
                           <td className="px-3 py-2.5 text-right text-gray-600">
@@ -124,6 +137,16 @@ export default function CostTable() {
             </Card>
           ))}
         </div>
+      )}
+
+      {selectedRow && (
+        <OptionMaterialPanel
+          optionId={selectedRow.id}
+          optionName={selectedRow.option_name}
+          productName={selectedRow.product_name}
+          onClose={() => setSelectedRow(null)}
+          onUpdated={() => void load()}
+        />
       )}
     </div>
   );
