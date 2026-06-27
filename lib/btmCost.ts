@@ -245,6 +245,28 @@ export async function updateLaborCost(
   return error ? { ok: false, error: error.message } : { ok: true };
 }
 
+export async function updateCostPrice(
+  optionId: number,
+  costPrice: number
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: opt } = await btmSupabase
+    .from("btm_product_options")
+    .select("labor_cost")
+    .eq("id", optionId)
+    .single();
+
+  const laborCost = (opt as { labor_cost: number } | null)?.labor_cost ?? 0;
+
+  const { error } = await btmSupabase
+    .from("btm_product_options")
+    .update({
+      cost_price: costPrice,
+      total_cost: costPrice + laborCost,
+    })
+    .eq("id", optionId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
 // ── 옵션-부자재 연결 ─────────────────────────────────────────────
 
 export interface BTMOptionMaterial {

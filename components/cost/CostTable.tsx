@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Search } from "lucide-react";
 import clsx from "clsx";
 import Card from "@/components/Card";
-import { getCostTable, updateLaborCost } from "@/lib/btmCost";
+import { getCostTable, updateCostPrice, updateLaborCost } from "@/lib/btmCost";
 import type { BTMCostRow } from "@/lib/btmCost";
 import OptionMaterialPanel from "./OptionMaterialPanel";
 
@@ -21,6 +21,14 @@ export default function CostTable() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  const handleCostPriceBlur = async (row: BTMCostRow, val: string) => {
+    const v = parseInt(val);
+    if (!isNaN(v) && v !== row.cost_price) {
+      await updateCostPrice(row.id, v);
+      await load();
+    }
+  };
 
   const handleLaborBlur = async (row: BTMCostRow, val: string) => {
     const v = parseInt(val);
@@ -104,8 +112,14 @@ export default function CostTable() {
                           <td className="px-3 py-2.5 text-right text-gray-600">
                             {row.selling_price.toLocaleString()}
                           </td>
-                          <td className="px-3 py-2.5 text-right text-gray-600">
-                            {row.cost_price > 0 ? row.cost_price.toLocaleString() : <span className="text-gray-300">미입력</span>}
+                          <td className="px-3 py-2.5 text-right">
+                            <input
+                              type="number"
+                              defaultValue={row.cost_price}
+                              onBlur={e => handleCostPriceBlur(row, e.target.value)}
+                              className="w-24 text-right border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white focus:outline-none focus:border-[#5b6af4]"
+                              placeholder="0"
+                            />
                           </td>
                           <td className="px-3 py-2.5 text-right">
                             <input
