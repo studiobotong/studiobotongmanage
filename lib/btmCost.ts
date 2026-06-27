@@ -33,6 +33,11 @@ export interface BTMPurchase {
   unit_price: number;
   import_tax: number;
   purchase_fee: number;
+  is_overseas: boolean;
+  shipping_local: number;
+  shipping_intl: number;
+  shipping_domestic: number;
+  other_cost: number;
   final_unit_price: number;
   purchase_url: string | null;
   memo: string | null;
@@ -158,8 +163,12 @@ async function refreshCostPrice(
   purchase: Omit<BTMPurchase, "id" | "final_unit_price" | "created_at" | "supplier_name" | "product_name" | "option_name" | "material_name">
 ): Promise<void> {
   // 최종단가 계산
+  const totalExtra = purchase.is_overseas
+    ? ((purchase.import_tax ?? 0) + (purchase.shipping_local ?? 0) + (purchase.shipping_intl ?? 0) + (purchase.purchase_fee ?? 0) + (purchase.other_cost ?? 0))
+    : ((purchase.shipping_domestic ?? 0) + (purchase.other_cost ?? 0));
+
   const finalPrice = purchase.quantity > 0
-    ? Math.round((purchase.unit_price * purchase.quantity + (purchase.import_tax ?? 0) + (purchase.purchase_fee ?? 0)) / purchase.quantity)
+    ? Math.round((purchase.unit_price * purchase.quantity + totalExtra) / purchase.quantity)
     : purchase.unit_price;
 
   if (purchase.purchase_type === "product") {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Loader2, Trash2, ExternalLink } from "lucide-react";
+import { Plus, Loader2, Trash2, ExternalLink, Globe, Truck } from "lucide-react";
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import {
@@ -35,10 +35,15 @@ export default function PurchaseManager() {
     material_id: "" as string,
     quantity: 1,
     unit_price: 0,
+    is_overseas: false,
+    shipping_local: 0,
+    shipping_intl: 0,
     import_tax: 0,
     purchase_fee: 0,
-    purchase_url: "",
+    other_cost: 0,
+    shipping_domestic: 0,
     memo: "",
+    purchase_url: "",
   });
 
   const load = useCallback(async () => {
@@ -56,8 +61,12 @@ export default function PurchaseManager() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const totalExtraCost = form.is_overseas
+    ? (form.import_tax + form.shipping_local + form.shipping_intl + form.purchase_fee + form.other_cost)
+    : (form.shipping_domestic + form.other_cost);
+
   const finalPrice = form.quantity > 0
-    ? Math.round((form.unit_price * form.quantity + form.import_tax + form.purchase_fee) / form.quantity)
+    ? Math.round((form.unit_price * form.quantity + totalExtraCost) / form.quantity)
     : form.unit_price;
 
   const handleSubmit = async () => {
@@ -80,10 +89,15 @@ export default function PurchaseManager() {
       material_id:    form.purchase_type === "material" ? parseInt(form.material_id) : null,
       quantity:       form.quantity,
       unit_price:     form.unit_price,
-      import_tax:     form.import_tax,
-      purchase_fee:   form.purchase_fee,
-      purchase_url:   form.purchase_url || null,
-      memo:           form.memo || null,
+      import_tax:       form.is_overseas ? form.import_tax : 0,
+      purchase_fee:     form.is_overseas ? form.purchase_fee : 0,
+      shipping_local:   form.is_overseas ? form.shipping_local : 0,
+      shipping_intl:    form.is_overseas ? form.shipping_intl : 0,
+      shipping_domestic: !form.is_overseas ? form.shipping_domestic : 0,
+      other_cost:       form.other_cost,
+      is_overseas:      form.is_overseas,
+      memo:             form.memo || null,
+      purchase_url:     form.purchase_url || null,
     });
     setSaving(false);
 
@@ -205,7 +219,30 @@ export default function PurchaseManager() {
             </div>
           )}
 
-          {/* 수량 / 단가 / 관부가세 / 수수료 */}
+          {/* 해외/국내 주문 토글 */}
+          <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.is_overseas}
+                onChange={e => setForm(f => ({
+                  ...f,
+                  is_overseas: e.target.checked,
+                  shipping_local: 0, shipping_intl: 0, import_tax: 0,
+                  purchase_fee: 0, shipping_domestic: 0, other_cost: 0
+                }))}
+                className="w-4 h-4 accent-[#5b6af4]"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                {form.is_overseas ? "🌏 해외 주문" : "🚚 국내 주문"}
+              </span>
+            </label>
+            <span className="text-xs text-gray-400">
+              {form.is_overseas ? "관부가세·현지배송비·국제배송비 포함" : "구매비용+택배비 기준"}
+            </span>
+          </div>
+
+          {/* 수량 + 구매비용 */}
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-xs text-gray-500 mb-1 block">수량</label>
@@ -214,27 +251,74 @@ export default function PurchaseManager() {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
             </div>
             <div>
-              <label className="text-xs text-gray-500 mb-1 block">단가 (원)</label>
+              <label className="text-xs text-gray-500 mb-1 block">구매비용 (원)</label>
               <input type="number" value={form.unit_price || ""}
                 onChange={e => setForm(f => ({ ...f, unit_price: parseInt(e.target.value) || 0 }))}
                 placeholder="0"
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
             </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">관부가세 (원, 선택)</label>
-              <input type="number" value={form.import_tax || ""}
-                onChange={e => setForm(f => ({ ...f, import_tax: parseInt(e.target.value) || 0 }))}
-                placeholder="0"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">구매수수료 (원, 선택)</label>
-              <input type="number" value={form.purchase_fee || ""}
-                onChange={e => setForm(f => ({ ...f, purchase_fee: parseInt(e.target.value) || 0 }))}
-                placeholder="0"
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
-            </div>
           </div>
+
+          {/* 해외 주문 추가 비용 */}
+          {form.is_overseas && (
+            <div className="grid grid-cols-2 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+              <div>
+                <label className="text-xs text-blue-600 mb-1 block">현지 배송비 (원)</label>
+                <input type="number" value={form.shipping_local || ""}
+                  onChange={e => setForm(f => ({ ...f, shipping_local: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-blue-600 mb-1 block">국제 배송비 (원)</label>
+                <input type="number" value={form.shipping_intl || ""}
+                  onChange={e => setForm(f => ({ ...f, shipping_intl: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-blue-600 mb-1 block">관부가세 (원)</label>
+                <input type="number" value={form.import_tax || ""}
+                  onChange={e => setForm(f => ({ ...f, import_tax: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-blue-600 mb-1 block">구매수수료 (원)</label>
+                <input type="number" value={form.purchase_fee || ""}
+                  onChange={e => setForm(f => ({ ...f, purchase_fee: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-blue-600 mb-1 block">기타비용 (원)</label>
+                <input type="number" value={form.other_cost || ""}
+                  onChange={e => setForm(f => ({ ...f, other_cost: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+            </div>
+          )}
+
+          {/* 국내 주문 추가 비용 */}
+          {!form.is_overseas && (
+            <div className="grid grid-cols-2 gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">택배비 (원)</label>
+                <input type="number" value={form.shipping_domestic || ""}
+                  onChange={e => setForm(f => ({ ...f, shipping_domestic: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">기타비용 (원)</label>
+                <input type="number" value={form.other_cost || ""}
+                  onChange={e => setForm(f => ({ ...f, other_cost: parseInt(e.target.value) || 0 }))}
+                  placeholder="0"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4] bg-white" />
+              </div>
+            </div>
+          )}
 
           {/* 최종 단가 표시 */}
           <div className="bg-blue-50 rounded-lg px-4 py-2.5 mb-3 flex justify-between items-center">
@@ -243,17 +327,18 @@ export default function PurchaseManager() {
           </div>
 
           <div className="mb-3">
+            <label className="text-xs text-gray-500 mb-1 block">비고</label>
+            <input type="text" value={form.memo}
+              onChange={e => setForm(f => ({ ...f, memo: e.target.value }))}
+              placeholder="특이사항 입력"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
+          </div>
+
+          <div className="mb-3">
             <label className="text-xs text-gray-500 mb-1 block">구매 링크 (선택)</label>
             <input type="url" value={form.purchase_url}
               onChange={e => setForm(f => ({ ...f, purchase_url: e.target.value }))}
               placeholder="https://..."
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
-          </div>
-
-          <div className="mb-4">
-            <label className="text-xs text-gray-500 mb-1 block">메모 (선택)</label>
-            <input type="text" value={form.memo}
-              onChange={e => setForm(f => ({ ...f, memo: e.target.value }))}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
           </div>
 

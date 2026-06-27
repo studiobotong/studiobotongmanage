@@ -9,7 +9,7 @@ import type { BTMMaterial } from "@/lib/btmCost";
 
 const CATEGORIES = ["포장재", "사은품", "택배포장", "기타"] as const;
 
-const emptyForm = { name: "", unit: "개", category: "기타" as string, memo: "" };
+const emptyForm = { name: "", unit: "EA", category: "기타" as string, memo: "" };
 
 export default function MaterialManager() {
   const [materials, setMaterials] = useState<BTMMaterial[]>([]);
@@ -72,8 +72,8 @@ export default function MaterialManager() {
           <div className="flex gap-2 flex-wrap">
             <input placeholder="부자재명" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
               autoFocus className={`${inputCls} flex-1 min-w-32`} />
-            <input placeholder="단위(개/롤/박스)" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
-              className={`${inputCls} w-28`} />
+            <input placeholder="단위(EA/롤/박스 등)" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
+              className={`${inputCls} w-32`} />
             <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
               className={`${inputCls} w-28`}>
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
@@ -105,7 +105,7 @@ export default function MaterialManager() {
                   {editId === m.id ? (
                     <>
                       <td className="px-4 py-2"><input value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} className={`${inputCls} w-full`} /></td>
-                      <td className="px-3 py-2"><input value={editForm.unit} onChange={e => setEditForm(f => ({ ...f, unit: e.target.value }))} className={`${inputCls} w-20`} /></td>
+                      <td className="px-3 py-2"><input placeholder="단위(EA/롤/박스 등)" value={editForm.unit} onChange={e => setEditForm(f => ({ ...f, unit: e.target.value }))} className={`${inputCls} w-32`} /></td>
                       <td className="px-3 py-2"><select value={editForm.category} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))} className={`${inputCls}`}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></td>
                       <td className="px-4 py-2 flex gap-2">
                         <button onClick={() => handleUpdate(m.id)} className="text-emerald-500"><Check className="w-4 h-4" /></button>
