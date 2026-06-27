@@ -5,7 +5,7 @@ import { Plus, Loader2, Trash2, ExternalLink, Globe, Truck } from "lucide-react"
 import Card from "@/components/Card";
 import Button from "@/components/Button";
 import {
-  getPurchases, createPurchase, deletePurchase,
+  getPurchases, createPurchase, updatePurchase, deletePurchase,
   getSuppliers, getMaterials,
 } from "@/lib/btmCost";
 import type { BTMPurchase, BTMSupplier, BTMMaterial } from "@/lib/btmCost";
@@ -22,6 +22,7 @@ export default function PurchaseManager() {
   const [loading, setLoading]       = useState(true);
   const [showForm, setShowForm]     = useState(false);
   const [saving, setSaving]         = useState(false);
+  const [editingId, setEditingId]   = useState<number | null>(null);
   const [toast, setToast]           = useState<string | null>(null);
 
   // Form state
@@ -79,36 +80,67 @@ export default function PurchaseManager() {
     if (form.unit_price <= 0) { setToast("단가를 입력해주세요."); return; }
 
     setSaving(true);
-    const result = await createPurchase({
-      purchase_date:  form.purchase_date,
-      supplier_id:    form.supplier_id ? parseInt(form.supplier_id) : null,
-      purchase_type:  form.purchase_type,
-      product_id:     form.purchase_type === "product" ? form.product_id : null,
-      option_id:      form.purchase_type === "product" && !form.all_options && form.option_id
-                        ? parseInt(form.option_id) : null,
-      material_id:    form.purchase_type === "material" ? parseInt(form.material_id) : null,
-      quantity:       form.quantity,
-      unit_price:     form.unit_price,
-      import_tax:       form.is_overseas ? form.import_tax : 0,
-      purchase_fee:     form.is_overseas ? form.purchase_fee : 0,
-      shipping_local:   form.is_overseas ? form.shipping_local : 0,
-      shipping_intl:    form.is_overseas ? form.shipping_intl : 0,
+    const payload = {
+      purchase_date:     form.purchase_date,
+      supplier_id:       form.supplier_id ? parseInt(form.supplier_id) : null,
+      purchase_type:     form.purchase_type,
+      product_id:        form.purchase_type === "product" ? form.product_id : null,
+      option_id:         form.purchase_type === "product" && !form.all_options && form.option_id
+                           ? parseInt(form.option_id) : null,
+      material_id:       form.purchase_type === "material" ? parseInt(form.material_id) : null,
+      quantity:          form.quantity,
+      unit_price:        form.unit_price,
+      final_unit_price:  finalPrice,
+      import_tax:        form.is_overseas ? form.import_tax : 0,
+      purchase_fee:      form.is_overseas ? form.purchase_fee : 0,
+      shipping_local:    form.is_overseas ? form.shipping_local : 0,
+      shipping_intl:     form.is_overseas ? form.shipping_intl : 0,
       shipping_domestic: !form.is_overseas ? form.shipping_domestic : 0,
-      other_cost:       form.other_cost,
-      is_overseas:      form.is_overseas,
-      memo:             form.memo || null,
-      purchase_url:     form.purchase_url || null,
-    });
+      other_cost:        form.other_cost,
+      is_overseas:       form.is_overseas,
+      memo:              form.memo || null,
+      purchase_url:      form.purchase_url || null,
+    };
+
+    const result = editingId
+      ? await updatePurchase(editingId, payload)
+      : await createPurchase(payload);
     setSaving(false);
 
     if (result.ok) {
       setShowForm(false);
-      setToast("저장 완료! 원가가 자동 갱신됩니다.");
+      setEditingId(null);
+      setToast(editingId ? "수정 완료!" : "저장 완료! 원가가 자동 갱신됩니다.");
       await load();
     } else {
       setToast(result.error ?? "저장 실패");
     }
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleEdit = (p: BTMPurchase) => {
+    setForm({
+      purchase_date:     p.purchase_date,
+      supplier_id:       p.supplier_id ? String(p.supplier_id) : "",
+      purchase_type:     p.purchase_type as "product" | "material",
+      product_id:        p.product_id ?? "",
+      option_id:         p.option_id ? String(p.option_id) : "",
+      all_options:       !p.option_id,
+      material_id:       p.material_id ? String(p.material_id) : "",
+      quantity:          p.quantity,
+      unit_price:        p.unit_price,
+      is_overseas:       p.is_overseas ?? false,
+      shipping_local:    p.shipping_local ?? 0,
+      shipping_intl:     p.shipping_intl ?? 0,
+      import_tax:        p.import_tax ?? 0,
+      purchase_fee:      p.purchase_fee ?? 0,
+      other_cost:        p.other_cost ?? 0,
+      shipping_domestic: p.shipping_domestic ?? 0,
+      memo:              p.memo ?? "",
+      purchase_url:      p.purchase_url ?? "",
+    });
+    setEditingId(p.id);
+    setShowForm(true);
   };
 
   const handleDelete = async (id: number) => {
@@ -130,7 +162,9 @@ export default function PurchaseManager() {
       {/* 구매 입력 폼 */}
       {showForm && (
         <Card className="mb-4">
-          <h3 className="text-sm font-semibold text-gray-800 mb-4">구매 내역 입력</h3>
+          <h3 className="text-sm font-semibold text-gray-800 mb-4">
+            {editingId ? "구매 내역 수정" : "구매 내역 입력"}
+          </h3>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-xs text-gray-500 mb-1 block">구매일</label>
@@ -352,7 +386,7 @@ export default function PurchaseManager() {
               className={saving ? "[&_svg]:animate-spin" : ""}>
               {saving ? "저장 중..." : "저장"}
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>취소</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); setEditingId(null); }}>취소</Button>
           </div>
         </Card>
       )}
@@ -414,10 +448,16 @@ export default function PurchaseManager() {
                       {p.final_unit_price.toLocaleString()}원
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button onClick={() => handleDelete(p.id)}
-                        className="text-gray-300 hover:text-red-400 transition-colors">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => handleEdit(p)}
+                          className="text-gray-300 hover:text-blue-400 transition-colors text-[10px]">
+                          수정
+                        </button>
+                        <button onClick={() => handleDelete(p.id)}
+                          className="text-gray-300 hover:text-red-400 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

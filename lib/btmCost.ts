@@ -177,12 +177,22 @@ export async function getPurchases(limit = 100): Promise<BTMPurchase[]> {
 }
 
 export async function createPurchase(
-  values: Omit<BTMPurchase, "id" | "final_unit_price" | "created_at" | "supplier_name" | "product_name" | "option_name" | "material_name">
+  values: Omit<BTMPurchase, "id" | "created_at" | "supplier_name" | "product_name" | "option_name" | "material_name">
 ): Promise<{ ok: boolean; error?: string }> {
   const { error } = await btmSupabase.from("btm_purchases").insert(values);
   if (error) return { ok: false, error: error.message };
 
   // 구매 후 원가 자동 갱신
+  await refreshCostPrice(values);
+  return { ok: true };
+}
+
+export async function updatePurchase(
+  id: number,
+  values: Omit<BTMPurchase, "id" | "created_at" | "supplier_name" | "product_name" | "option_name" | "material_name">
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await btmSupabase.from("btm_purchases").update(values).eq("id", id);
+  if (error) return { ok: false, error: error.message };
   await refreshCostPrice(values);
   return { ok: true };
 }
