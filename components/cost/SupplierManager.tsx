@@ -95,6 +95,12 @@ export default function SupplierManager() {
                     <input value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} className={inputCls} /></div>
                   <div><label className="text-xs text-gray-500 mb-1 block">온라인 주소</label>
                     <input value={editForm.website} onChange={e => setEditForm(f => ({ ...f, website: e.target.value }))} className={inputCls} /></div>
+                  <div className="col-span-2">
+                    <label className="text-xs text-gray-500 mb-1 block">메모</label>
+                    <input value={editForm.memo}
+                      onChange={e => setEditForm(f => ({ ...f, memo: e.target.value }))}
+                      placeholder="메모" className={inputCls} />
+                  </div>
                   <div className="col-span-2 flex gap-2">
                     <button onClick={() => handleUpdate(s.id)} className="text-emerald-500 flex items-center gap-1 text-sm"><Check className="w-4 h-4" />저장</button>
                     <button onClick={() => setEditId(null)} className="text-gray-400 flex items-center gap-1 text-sm"><X className="w-4 h-4" />취소</button>

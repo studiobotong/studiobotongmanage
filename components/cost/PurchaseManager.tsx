@@ -66,7 +66,7 @@ export default function PurchaseManager() {
     : (form.shipping_domestic + form.other_cost);
 
   const finalPrice = form.quantity > 0
-    ? Math.round((form.unit_price * form.quantity + totalExtraCost) / form.quantity)
+    ? Math.round((form.unit_price + totalExtraCost) / form.quantity)
     : form.unit_price;
 
   const handleSubmit = async () => {
@@ -246,12 +246,12 @@ export default function PurchaseManager() {
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-xs text-gray-500 mb-1 block">수량</label>
-              <input type="number" value={form.quantity}
+              <input type="number" step="1" value={form.quantity}
                 onChange={e => setForm(f => ({ ...f, quantity: parseInt(e.target.value) || 1 }))}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#5b6af4]" />
             </div>
             <div>
-              <label className="text-xs text-gray-500 mb-1 block">구매비용 (원)</label>
+              <label className="text-xs text-gray-500 mb-1 block">총 구매금액 (원)</label>
               <input type="number" value={form.unit_price || ""}
                 onChange={e => setForm(f => ({ ...f, unit_price: parseInt(e.target.value) || 0 }))}
                 placeholder="0"
@@ -321,9 +321,13 @@ export default function PurchaseManager() {
           )}
 
           {/* 최종 단가 표시 */}
-          <div className="bg-blue-50 rounded-lg px-4 py-2.5 mb-3 flex justify-between items-center">
-            <span className="text-xs text-blue-600">최종 개당 단가 (자동 계산)</span>
-            <span className="text-sm font-bold text-blue-700">{finalPrice.toLocaleString()}원</span>
+          <div className="bg-blue-50 rounded-lg px-4 py-2.5 mb-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-blue-600">
+                개당 단가 (총금액 {form.unit_price.toLocaleString()}원 ÷ 수량 {form.quantity}개)
+              </span>
+              <span className="text-sm font-bold text-blue-700">{finalPrice.toLocaleString()}원</span>
+            </div>
           </div>
 
           <div className="mb-3">
@@ -368,10 +372,9 @@ export default function PurchaseManager() {
                 <tr className="border-b border-gray-100 text-gray-400">
                   <th className="text-left px-4 py-3 font-medium">구매일</th>
                   <th className="text-left px-3 py-3 font-medium">구분</th>
-                  <th className="text-left px-3 py-3 font-medium">품목</th>
+                  <th className="text-left px-3 py-3 font-medium min-w-[220px]">품목</th>
                   <th className="text-right px-3 py-3 font-medium">수량</th>
                   <th className="text-right px-3 py-3 font-medium">최종단가</th>
-                  <th className="text-left px-3 py-3 font-medium">거래처</th>
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
@@ -388,8 +391,17 @@ export default function PurchaseManager() {
                         {p.purchase_type === "product" ? "상품" : "부자재"}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-gray-700 max-w-[200px]">
-                      <p className="truncate">{p.memo ?? "—"}</p>
+                    <td className="px-3 py-2.5 text-gray-700 max-w-[220px]">
+                      <p className="text-xs font-medium truncate">
+                        {p.purchase_type === "product"
+                          ? (p.product_name
+                              ? `${p.product_name}${p.option_name && p.option_id ? ` (${p.option_name})` : ""}`
+                              : "—")
+                          : (p.material_name ?? "—")}
+                      </p>
+                      {p.supplier_name && (
+                        <p className="text-[10px] text-gray-400">{p.supplier_name}</p>
+                      )}
                       {p.purchase_url && (
                         <a href={p.purchase_url} target="_blank" rel="noreferrer"
                           className="text-[10px] text-blue-400 flex items-center gap-0.5 hover:text-blue-600">
@@ -401,7 +413,6 @@ export default function PurchaseManager() {
                     <td className="px-3 py-2.5 text-right font-medium text-gray-800">
                       {p.final_unit_price.toLocaleString()}원
                     </td>
-                    <td className="px-3 py-2.5 text-gray-500">—</td>
                     <td className="px-4 py-2.5 text-right">
                       <button onClick={() => handleDelete(p.id)}
                         className="text-gray-300 hover:text-red-400 transition-colors">

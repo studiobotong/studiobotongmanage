@@ -6,6 +6,7 @@ import clsx from "clsx";
 import Header from "@/components/Header";
 import Button from "@/components/Button";
 import Card from "@/components/Card";
+import { updateProductSortOrder } from "@/lib/btmCost";
 
 interface BTMProduct {
   id: number;
@@ -15,6 +16,7 @@ interface BTMProduct {
   sale_price: number;
   thumbnail_url: string | null;
   updated_at: string;
+  sort_order?: number;
 }
 
 interface BTMProductOption {
@@ -53,6 +55,7 @@ export default function ProductsPageClient() {
       const { data } = await btmSupabase
         .from("btm_products")
         .select("*")
+        .order("sort_order", { ascending: true })
         .order("product_name", { ascending: true });
       setProducts((data ?? []) as BTMProduct[]);
     } finally {
@@ -218,28 +221,60 @@ export default function ProductsPageClient() {
 
                 return (
                   <div key={product.product_id}>
-                    <button
-                      className="w-full text-left px-4 py-3.5 hover:bg-gray-50/60 flex items-center gap-3 transition-colors"
-                      onClick={() => handleExpand(product.product_id)}
-                    >
-                      {product.thumbnail_url ? (
-                        <img src={product.thumbnail_url} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-gray-100" />
-                      ) : (
-                        <div className="w-10 h-10 rounded-lg bg-gray-100 flex-shrink-0 flex items-center justify-center">
-                          <Package className="w-5 h-5 text-gray-300" />
+                    <div className="w-full px-4 py-3.5 hover:bg-gray-50/60 flex items-center gap-3 transition-colors">
+                      <button
+                        className="flex-1 text-left flex items-center gap-3 min-w-0"
+                        onClick={() => handleExpand(product.product_id)}
+                      >
+                        {product.thumbnail_url ? (
+                          <img src={product.thumbnail_url} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0 bg-gray-100" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-gray-100 flex-shrink-0 flex items-center justify-center">
+                            <Package className="w-5 h-5 text-gray-300" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <p className="text-sm font-medium text-gray-800 truncate">{product.product_name}</p>
+                            {hasLowStock && <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />}
+                          </div>
+                          <p className="text-xs text-gray-400">{product.sale_price.toLocaleString()}원</p>
                         </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <p className="text-sm font-medium text-gray-800 truncate">{product.product_name}</p>
-                          {hasLowStock && <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />}
-                        </div>
-                        <p className="text-xs text-gray-400">{product.sale_price.toLocaleString()}원</p>
+                      </button>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <span className={clsx("text-[10px] font-medium px-2 py-0.5 rounded-full", statusInfo.color)}>
+                          {statusInfo.label}
+                        </span>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const idx = products.findIndex(p => p.product_id === product.product_id);
+                            if (idx <= 0) return;
+                            const prev = products[idx - 1]!;
+                            await Promise.all([
+                              updateProductSortOrder(product.product_id, prev.sort_order ?? idx - 1),
+                              updateProductSortOrder(prev.product_id, product.sort_order ?? idx),
+                            ]);
+                            await loadProducts();
+                          }}
+                          className="text-gray-300 hover:text-gray-500 text-xs px-1"
+                          title="위로">↑</button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const idx = products.findIndex(p => p.product_id === product.product_id);
+                            if (idx >= products.length - 1) return;
+                            const next = products[idx + 1]!;
+                            await Promise.all([
+                              updateProductSortOrder(product.product_id, next.sort_order ?? idx + 1),
+                              updateProductSortOrder(next.product_id, product.sort_order ?? idx),
+                            ]);
+                            await loadProducts();
+                          }}
+                          className="text-gray-300 hover:text-gray-500 text-xs px-1"
+                          title="아래로">↓</button>
                       </div>
-                      <span className={clsx("text-[10px] font-medium px-2 py-0.5 rounded-full flex-shrink-0", statusInfo.color)}>
-                        {statusInfo.label}
-                      </span>
-                    </button>
+                    </div>
 
                     {/* 옵션 패널 */}
                     {isExpanded && (

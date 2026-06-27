@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, Search } from "lucide-react";
 import clsx from "clsx";
 import Card from "@/components/Card";
-import { getCostTable, updateCostPrice, updateLaborCost } from "@/lib/btmCost";
+import { getCostTable, updateCostPrice, updateLaborCost, updateProductSortOrder } from "@/lib/btmCost";
 import type { BTMCostRow } from "@/lib/btmCost";
 import OptionMaterialPanel from "./OptionMaterialPanel";
 
@@ -51,6 +51,12 @@ export default function CostTable() {
     (grouped[r.product_id] ??= []).push(r);
   }
 
+  const productOrder = Object.keys(grouped).sort((a, b) => {
+    const sa = rows.find(r => r.product_id === a)?.sort_order ?? 999;
+    const sb = rows.find(r => r.product_id === b)?.sort_order ?? 999;
+    return sa - sb;
+  });
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-4">
@@ -71,16 +77,56 @@ export default function CostTable() {
         </div>
       ) : (
         <div className="space-y-3">
-          {Object.entries(grouped).map(([productId, opts]) => (
+          {productOrder.map(productId => {
+            const opts = grouped[productId]!;
+            return (
             <Card key={productId} className="overflow-hidden p-0">
               <div
                 className="px-4 py-3 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-100/80 transition-colors"
-                onClick={() => setSelectedProduct({ product_id: productId, product_name: opts[0]?.product_name ?? "" })}
               >
-                <p className="text-sm font-medium text-gray-800">{opts[0]?.product_name}</p>
-                <span className="text-xs text-gray-400 flex items-center gap-1">
-                  공통 부자재 <span className="text-gray-300">↗</span>
-                </span>
+                <div
+                  className="flex-1 flex items-center justify-between"
+                  onClick={() => setSelectedProduct({ product_id: productId, product_name: opts[0]?.product_name ?? "" })}
+                >
+                  <p className="text-sm font-medium text-gray-800">{opts[0]?.product_name}</p>
+                  <span className="text-xs text-gray-400 flex items-center gap-1 mr-3">
+                    공통 부자재 <span className="text-gray-300">↗</span>
+                  </span>
+                </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const idx = productOrder.indexOf(productId);
+                      if (idx <= 0) return;
+                      const prevId = productOrder[idx - 1]!;
+                      const curSort = rows.find(r => r.product_id === productId)?.sort_order ?? idx;
+                      const prevSort = rows.find(r => r.product_id === prevId)?.sort_order ?? idx - 1;
+                      await Promise.all([
+                        updateProductSortOrder(productId, prevSort),
+                        updateProductSortOrder(prevId, curSort),
+                      ]);
+                      await load();
+                    }}
+                    className="px-1.5 py-0.5 rounded text-gray-400 hover:bg-gray-200 text-xs"
+                    title="위로">↑</button>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const idx = productOrder.indexOf(productId);
+                      if (idx >= productOrder.length - 1) return;
+                      const nextId = productOrder[idx + 1]!;
+                      const curSort = rows.find(r => r.product_id === productId)?.sort_order ?? idx;
+                      const nextSort = rows.find(r => r.product_id === nextId)?.sort_order ?? idx + 1;
+                      await Promise.all([
+                        updateProductSortOrder(productId, nextSort),
+                        updateProductSortOrder(nextId, curSort),
+                      ]);
+                      await load();
+                    }}
+                    className="px-1.5 py-0.5 rounded text-gray-400 hover:bg-gray-200 text-xs"
+                    title="아래로">↓</button>
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -88,19 +134,19 @@ export default function CostTable() {
                     <tr className="border-b border-gray-100 text-gray-400">
                       <th className="text-left px-4 py-2.5 font-medium">옵션명</th>
                       <th className="text-right px-3 py-2.5 font-medium">판매가</th>
-                      <th className="text-right px-3 py-2.5 font-medium">최종원가</th>
-                      <th className="text-right px-3 py-2.5 font-medium">공임비</th>
-                      <th className="text-right px-3 py-2.5 font-medium">총원가</th>
-                      <th className="text-right px-3 py-2.5 font-medium">마진율</th>
-                      <th className="text-right px-4 py-2.5 font-medium">재고</th>
+                      <th className="text-right px-3 py-2.5 text-xs font-medium text-gray-400">구매원가</th>
+                      <th className="text-right px-3 py-2.5 text-xs font-medium text-gray-400">공임비</th>
+                      <th className="text-right px-3 py-2.5 text-xs font-medium text-gray-400 bg-blue-50/50">최종원가</th>
+                      <th className="text-right px-3 py-2.5 text-xs font-medium text-gray-400">마진율</th>
+                      <th className="text-right px-4 py-2.5 text-xs font-medium text-gray-400">재고</th>
                     </tr>
                   </thead>
                   <tbody>
                     {opts.map(row => {
-                      const margin = row.selling_price > 0
+                      const margin = row.selling_price > 0 && row.total_cost > 0
                         ? ((row.selling_price - row.total_cost) / row.selling_price * 100)
                         : 0;
-                      const isLowMargin = margin < 30 && row.selling_price > 0;
+                      const isLowMargin = margin > 0 && margin < 30;
                       return (
                         <tr
                           key={row.id}
@@ -125,6 +171,7 @@ export default function CostTable() {
                             <div className="flex items-center justify-end gap-1.5">
                               <input
                                 type="number"
+                                step="1"
                                 defaultValue={row.cost_price}
                                 onBlur={e => handleCostPriceBlur(row, e.target.value)}
                                 className={clsx(
@@ -163,13 +210,16 @@ export default function CostTable() {
                           <td className="px-3 py-2.5 text-right">
                             <input
                               type="number"
+                              step="1"
                               defaultValue={row.labor_cost}
                               onBlur={e => handleLaborBlur(row, e.target.value)}
                               className="w-20 text-right border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white focus:outline-none focus:border-[#5b6af4]"
                             />
                           </td>
-                          <td className={clsx("px-3 py-2.5 text-right font-medium",
-                            row.total_cost > 0 ? "text-gray-800" : "text-gray-300")}>
+                          <td className={clsx(
+                            "px-3 py-2.5 text-right font-medium text-sm bg-blue-50/30",
+                            row.total_cost > 0 ? "text-[#5b6af4]" : "text-gray-300"
+                          )}>
                             {row.total_cost > 0 ? row.total_cost.toLocaleString() : "—"}
                           </td>
                           <td className={clsx("px-3 py-2.5 text-right font-medium",
@@ -188,7 +238,8 @@ export default function CostTable() {
                 </table>
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 

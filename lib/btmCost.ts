@@ -62,6 +62,7 @@ export interface BTMCostRow {
   total_cost: number;
   stock_quantity: number;
   is_manual_cost: boolean;
+  sort_order?: number;
 }
 
 // ── 거래처 ───────────────────────────────────────────────────────
@@ -140,7 +141,39 @@ export async function getPurchases(limit = 100): Promise<BTMPurchase[]> {
     .order("purchase_date", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit);
-  return (data ?? []) as BTMPurchase[];
+
+  const purchases = (data ?? []) as BTMPurchase[];
+  if (purchases.length === 0) return [];
+
+  const productIds  = [...new Set(purchases.filter(p => p.product_id).map(p => p.product_id!))];
+  const optionIds   = [...new Set(purchases.filter(p => p.option_id).map(p => p.option_id!))];
+  const materialIds = [...new Set(purchases.filter(p => p.material_id).map(p => p.material_id!))];
+  const supplierIds = [...new Set(purchases.filter(p => p.supplier_id).map(p => p.supplier_id!))];
+
+  const [prods, opts, mats, sups] = await Promise.all([
+    productIds.length  ? btmSupabase.from("btm_products").select("product_id, product_name").in("product_id", productIds) : { data: [] },
+    optionIds.length   ? btmSupabase.from("btm_product_options").select("id, option_name").in("id", optionIds) : { data: [] },
+    materialIds.length ? btmSupabase.from("btm_materials").select("id, name").in("id", materialIds) : { data: [] },
+    supplierIds.length ? btmSupabase.from("btm_suppliers").select("id, name").in("id", supplierIds) : { data: [] },
+  ]);
+
+  const productMap:  Record<string, string> = {};
+  const optionMap:   Record<number, string> = {};
+  const materialMap: Record<number, string> = {};
+  const supplierMap: Record<number, string> = {};
+
+  for (const p of prods.data   ?? []) productMap[(p as {product_id:string; product_name:string}).product_id]  = (p as {product_id:string; product_name:string}).product_name;
+  for (const o of opts.data    ?? []) optionMap[(o as {id:number; option_name:string}).id]                     = (o as {id:number; option_name:string}).option_name;
+  for (const m of mats.data    ?? []) materialMap[(m as {id:number; name:string}).id]                          = (m as {id:number; name:string}).name;
+  for (const s of sups.data    ?? []) supplierMap[(s as {id:number; name:string}).id]                          = (s as {id:number; name:string}).name;
+
+  return purchases.map(p => ({
+    ...p,
+    product_name:  p.product_id  ? productMap[p.product_id]   : undefined,
+    option_name:   p.option_id   ? optionMap[p.option_id]     : undefined,
+    material_name: p.material_id ? materialMap[p.material_id] : undefined,
+    supplier_name: p.supplier_id ? supplierMap[p.supplier_id] : undefined,
+  }));
 }
 
 export async function createPurchase(
@@ -170,7 +203,7 @@ async function refreshCostPrice(
     : ((purchase.shipping_domestic ?? 0) + (purchase.other_cost ?? 0));
 
   const finalPrice = purchase.quantity > 0
-    ? Math.round((purchase.unit_price * purchase.quantity + totalExtra) / purchase.quantity)
+    ? Math.round((purchase.unit_price + totalExtra) / purchase.quantity)
     : purchase.unit_price;
 
   if (purchase.purchase_type === "product") {
@@ -214,14 +247,21 @@ export async function getCostTable(): Promise<BTMCostRow[]> {
 
   const { data: prods } = await btmSupabase
     .from("btm_products")
-    .select("product_id, product_name");
+    .select("product_id, product_name, sort_order")
+    .order("sort_order", { ascending: true });
 
   const nameMap: Record<string, string> = {};
-  for (const p of prods ?? []) nameMap[p.product_id] = p.product_name;
+  const sortMap: Record<string, number> = {};
+  const sortedProds = (prods?.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)) ?? []);
+  for (const p of sortedProds) {
+    nameMap[p.product_id] = p.product_name;
+    sortMap[p.product_id] = p.sort_order ?? 0;
+  }
 
   return (opts ?? []).map(o => ({
     ...o,
     product_name: nameMap[o.product_id] ?? o.product_id,
+    sort_order: sortMap[o.product_id] ?? 0,
   })) as BTMCostRow[];
 }
 
@@ -440,4 +480,24 @@ export async function getMaterialLatestPrice(materialId: number): Promise<number
     .limit(1)
     .maybeSingle();
   return (data as { final_unit_price: number } | null)?.final_unit_price ?? 0;
+}
+
+// ── 상품 순서 변경 ────────────────────────────────────────────────
+export async function updateProductSortOrder(
+  productId: string,
+  newSortOrder: number
+): Promise<void> {
+  await btmSupabase
+    .from("btm_products")
+    .update({ sort_order: newSortOrder })
+    .eq("product_id", productId);
+}
+
+export async function getProductsSorted(): Promise<{ product_id: string; product_name: string; sort_order: number }[]> {
+  const { data } = await btmSupabase
+    .from("btm_products")
+    .select("product_id, product_name, sort_order")
+    .order("sort_order", { ascending: true })
+    .order("product_name", { ascending: true });
+  return (data ?? []) as { product_id: string; product_name: string; sort_order: number }[];
 }
