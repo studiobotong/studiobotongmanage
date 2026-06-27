@@ -17,6 +17,7 @@ export interface BTMMaterial {
   name: string;
   unit: string;
   category: string;
+  unit_price: number;
   memo: string | null;
   created_at: string;
 }
@@ -328,22 +329,21 @@ export async function removeOptionMaterial(id: number, optionId: number): Promis
 
 // total_cost 재계산 (cost_price + 부자재비 합계 + labor_cost)
 export async function recalcTotalCost(optionId: number): Promise<void> {
-  // 옵션 기본 정보 + product_id
   const { data: opt } = await btmSupabase
     .from("btm_product_options")
-    .select("cost_price, labor_cost, product_id")
+    .select("cost_price, labor_cost, product_id, is_manual_cost")
     .eq("id", optionId)
     .single();
 
   if (!opt) return;
 
-  // 옵션별 부자재 (option_id 기준)
+  // 옵션별 부자재
   const { data: optLinks } = await btmSupabase
     .from("btm_option_materials")
     .select("material_id, quantity_per_unit")
     .eq("option_id", optionId);
 
-  // 상품 공통 부자재 (product_id 기준, option_id IS NULL)
+  // 상품 공통 부자재
   const { data: prodLinks } = await btmSupabase
     .from("btm_option_materials")
     .select("material_id, quantity_per_unit")
@@ -352,24 +352,26 @@ export async function recalcTotalCost(optionId: number): Promise<void> {
 
   const allLinks = [...(optLinks ?? []), ...(prodLinks ?? [])];
 
+  // 부자재 단가는 btm_materials.unit_price에서 직접 조회
   let materialCost = 0;
-  for (const link of allLinks) {
-    const { data: purchase } = await btmSupabase
-      .from("btm_purchases")
-      .select("final_unit_price")
-      .eq("material_id", link.material_id)
-      .eq("purchase_type", "material")
-      .order("purchase_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  if (allLinks.length > 0) {
+    const materialIds = allLinks.map(l => l.material_id);
+    const { data: mats } = await btmSupabase
+      .from("btm_materials")
+      .select("id, unit_price")
+      .in("id", materialIds);
 
-    const price = (purchase as { final_unit_price: number } | null)?.final_unit_price ?? 0;
-    materialCost += price * Number(link.quantity_per_unit);
+    const priceMap: Record<number, number> = {};
+    for (const m of mats ?? []) {
+      priceMap[m.id] = m.unit_price ?? 0;
+    }
+    for (const link of allLinks) {
+      materialCost += (priceMap[link.material_id] ?? 0) * Number(link.quantity_per_unit);
+    }
   }
 
-  const totalCost = (opt as { cost_price: number; labor_cost: number }).cost_price ?? 0
-    + materialCost
-    + ((opt as { labor_cost: number }).labor_cost ?? 0);
+  const o = opt as { cost_price: number; labor_cost: number };
+  const totalCost = (o.cost_price ?? 0) + materialCost + (o.labor_cost ?? 0);
 
   await btmSupabase
     .from("btm_product_options")

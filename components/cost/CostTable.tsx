@@ -17,7 +17,9 @@ export default function CostTable() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setRows(await getCostTable());
+    const data = await getCostTable();
+    setRows(data);
+    setSelectedRow(prev => prev ? (data.find(r => r.id === prev.id) ?? null) : null);
     setLoading(false);
   }, []);
 
@@ -86,7 +88,7 @@ export default function CostTable() {
                     <tr className="border-b border-gray-100 text-gray-400">
                       <th className="text-left px-4 py-2.5 font-medium">옵션명</th>
                       <th className="text-right px-3 py-2.5 font-medium">판매가</th>
-                      <th className="text-right px-3 py-2.5 font-medium">구매단가</th>
+                      <th className="text-right px-3 py-2.5 font-medium">최종원가</th>
                       <th className="text-right px-3 py-2.5 font-medium">공임비</th>
                       <th className="text-right px-3 py-2.5 font-medium">총원가</th>
                       <th className="text-right px-3 py-2.5 font-medium">마진율</th>
