@@ -15,6 +15,7 @@ import {
   Landmark,
   Receipt,
   ShoppingBag,
+  Calculator,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { logout } from "@/app/actions/auth";
@@ -54,6 +55,11 @@ const navItems = [
     label: "Settings",
     href: "/settings",
     icon: Settings,
+  },
+  {
+    label: "원가 관리",
+    href: "/cost",
+    icon: Calculator,
   },
   {
     label: "정산내역",
